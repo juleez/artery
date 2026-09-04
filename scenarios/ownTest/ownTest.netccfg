@@ -14,4 +14,15 @@
     <junctions>
         <no-turnarounds value="true"/>
     </junctions>
+
+    <projection>
+        <!-- proper geo-referencing is required so artery's CaService can convert
+             SUMO's local x/y into valid WGS84 lat/lon for CAMs; without it
+             netconvert leaves the net unprojected and CAM encoding fails.
+             proj.inverse declares the plain x/y as already being tmerc
+             easting/northing around lat_0/lon_0, instead of trying to
+             reproject them as if they were geographic input. -->
+        <proj value="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
+        <proj.inverse value="true"/>
+    </projection>
 </configuration>

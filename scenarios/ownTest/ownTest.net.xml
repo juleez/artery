@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2026-09-04T21:32:08.287399+01:00 by Eclipse SUMO netconvert 1.27.1
+<!-- generated on 2026-09-04T23:40:03.166336+01:00 by Eclipse SUMO netconvert 1.27.1
 <netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
@@ -12,6 +12,11 @@
         <output-file value="ownTest.net.xml"/>
     </output>
 
+    <projection>
+        <proj value="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
+        <proj.inverse value="true"/>
+    </projection>
+
     <junctions>
         <no-turnarounds value="true"/>
     </junctions>
@@ -21,7 +26,7 @@
 
 <net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
 
-    <location netOffset="0.00,200.00" convBoundary="0.00,0.00,3000.00,200.00" origBoundary="0.00,-200.00,3000.00,0.00" projParameter="!"/>
+    <location netOffset="0.00,200.00" convBoundary="0.00,0.00,3000.00,200.00" origBoundary="0.000000,-200.000000,3000.000000,0.000000" projParameter="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
 
     <edge id=":n1_in_0" function="internal">
         <lane id=":n1_in_0_0" index="0" speed="7.61" length="4.02" shape="936.95,187.51 937.89,188.23 938.63,188.61 939.44,188.77 940.62,188.80"/>
