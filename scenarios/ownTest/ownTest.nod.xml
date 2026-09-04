@@ -7,6 +7,8 @@
     <node id="n2_out" x="2000" y="0"/>
     <node id="hwEnd" x="3000" y="0"/>
 
-    <node id="ramp0Start" x="650" y="-200"/>
-    <node id="ramp1Start" x="1550" y="-200"/>
+    <!-- ramps taper in at a shallow ~10 degree angle over 400m, like a real
+         acceleration lane, instead of cutting in sharply -->
+    <node id="ramp0Start" x="550" y="-70"/>
+    <node id="ramp1Start" x="1350" y="-70"/>
 </nodes>
