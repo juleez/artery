@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edges>
+    <!-- mainline: three through lanes -->
+    <edge id="hw0" from="hwStart" to="n1_in" numLanes="3" speed="33.33" priority="3"/>
+    <edge id="hw1" from="n1_out" to="n2_in" numLanes="3" speed="33.33" priority="3"/>
+    <edge id="hw2" from="n2_out" to="hwEnd" numLanes="3" speed="33.33" priority="3"/>
+
+    <!-- acceleration lanes where a ramp merges in; the 4th lane is dropped again
+         at the end of each of these segments, forcing a merge lane change -->
+    <edge id="hw1acc" from="n1_in" to="n1_out" numLanes="4" speed="27.78" priority="3"/>
+    <edge id="hw2acc" from="n2_in" to="n2_out" numLanes="4" speed="27.78" priority="3"/>
+
+    <!-- on-ramps -->
+    <edge id="ramp0" from="ramp0Start" to="n1_in" numLanes="1" speed="19.44" priority="1"
+          shape="650.00,-200.00 800.00,-140.00 900.00,-40.00 950.00,0.00"/>
+    <edge id="ramp1" from="ramp1Start" to="n2_in" numLanes="1" speed="19.44" priority="1"
+          shape="1550.00,-200.00 1650.00,-140.00 1720.00,-40.00 1750.00,0.00"/>
+</edges>

@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<routes>
+   <!-- passenger cars with varying desired speed: the spread makes faster cars
+        catch up to slower ones every now and then, triggering an overtaking
+        lane change -->
+   <vType id="car" vClass="passenger" length="5" minGap="2.5" maxSpeed="50"
+          speedFactor="normc(1,0.15,0.7,1.3)"
+          lcStrategic="1" lcCooperative="1" lcSpeedGain="1.5" lcKeepRight="1"
+          color="0,0.67,0"/>
+
+   <!-- slower vehicles that the cars occasionally need to pass -->
+   <vType id="truck" vClass="trailer" length="12" minGap="3" maxSpeed="25"
+          speedFactor="1" guiShape="truck"
+          lcStrategic="1" lcCooperative="1" lcSpeedGain="0" lcKeepRight="1"
+          color="0.6,0.6,0.6"/>
+
+   <!-- mainline: hw0 -> [ramp0 merges in] -> hw1 -> [ramp1 merges in] -> hw2 -->
+   <route id="route0" edges="hw0 hw1acc hw1 hw2acc hw2"/>
+   <!-- on-ramps: a short single-lane ramp joins the acceleration lane, which is
+        dropped again a bit further down the mainline, forcing a merge -->
+   <route id="ramp0route" edges="ramp0 hw1acc hw1 hw2acc hw2"/>
+   <route id="ramp1route" edges="ramp1 hw2acc hw2"/>
+
+   <!-- vehicles must be listed in non-decreasing depart order -->
+   <vehicle id="truck0" type="truck" route="route0" depart="0" departLane="1" departSpeed="max"/>
+   <vehicle id="car0" type="car" route="route0" depart="0" departLane="random" departSpeed="max"/>
+   <vehicle id="car1" type="car" route="route0" depart="3" departLane="random" departSpeed="max"/>
+   <!-- cars entering via the on-ramps -->
+   <vehicle id="ramp0car0" type="car" route="ramp0route" depart="5" departLane="0" departSpeed="max"/>
+   <vehicle id="car2" type="car" route="route0" depart="6" departLane="random" departSpeed="max"/>
+   <vehicle id="car3" type="car" route="route0" depart="9" departLane="random" departSpeed="max"/>
+   <vehicle id="ramp1car0" type="car" route="ramp1route" depart="10" departLane="0" departSpeed="max"/>
+   <vehicle id="car4" type="car" route="route0" depart="12" departLane="random" departSpeed="max"/>
+   <vehicle id="car5" type="car" route="route0" depart="15" departLane="random" departSpeed="max"/>
+   <vehicle id="car6" type="car" route="route0" depart="18" departLane="random" departSpeed="max"/>
+   <vehicle id="ramp0car1" type="car" route="ramp0route" depart="20" departLane="0" departSpeed="max"/>
+   <vehicle id="car7" type="car" route="route0" depart="21" departLane="random" departSpeed="max"/>
+   <vehicle id="truck1" type="truck" route="route0" depart="25" departLane="2" departSpeed="max"/>
+   <vehicle id="ramp1car1" type="car" route="ramp1route" depart="28" departLane="0" departSpeed="max"/>
+</routes>

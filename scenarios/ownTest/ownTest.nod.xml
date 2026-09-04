@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nodes>
+    <node id="hwStart" x="0" y="0"/>
+    <node id="n1_in" x="950" y="0"/>
+    <node id="n1_out" x="1200" y="0"/>
+    <node id="n2_in" x="1750" y="0"/>
+    <node id="n2_out" x="2000" y="0"/>
+    <node id="hwEnd" x="3000" y="0"/>
+
+    <node id="ramp0Start" x="650" y="-200"/>
+    <node id="ramp1Start" x="1550" y="-200"/>
+</nodes>

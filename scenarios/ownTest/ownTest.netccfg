@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- regenerate ownTest.net.xml after editing the node/edge sources:
+     netconvert -c ownTest.netccfg -->
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+    <input>
+        <node-files value="ownTest.nod.xml"/>
+        <edge-files value="ownTest.edg.xml"/>
+    </input>
+
+    <output>
+        <output-file value="ownTest.net.xml"/>
+    </output>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+    </junctions>
+</configuration>
