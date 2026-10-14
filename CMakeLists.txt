@@ -27,6 +27,7 @@ option(WITH_TESTBED "Build Artery with testbed feature" OFF)
 option(WITH_ENVMOD "Build Artery with environment model feature" ON)
 option(WITH_STORYBOARD "Build Artery with storyboard feature" ON)
 option(WITH_TRANSFUSION "Build Artery with transfusion feature" OFF)
+option(WITH_MCM "Build Artery with maneuver coordination feature" ON)
 
 # Miscellaneous stuff, does not affect functionality directly.
 option(WITH_SCENARIOS "Build Artery with scenarios" ON)

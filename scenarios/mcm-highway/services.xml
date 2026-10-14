@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services>
+    <service type="artery.application.CaService" name="CA">
+        <listener port="2001" />
+    </service>
+    <service type="artery.mcm.McService" name="MCS">
+        <listener port="2050" />
+    </service>
+</services>

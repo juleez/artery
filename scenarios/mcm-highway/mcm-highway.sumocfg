@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+    <input>
+        <net-file value="mcm-highway.net.xml"/>
+        <route-files value="mcm-highway.rou.xml"/>
+    </input>
+
+    <time>
+        <begin value="0"/>
+        <step-length value="0.1"/>
+    </time>
+
+    <processing>
+        <!-- continuous lane changes: the vehicle moves laterally at constant speed
+             over this duration instead of jumping to the target lane in one step;
+             McService.laneChangeDuration has to match this value -->
+        <lanechange.duration value="3"/>
+        <collision.action value="warn"/>
+    </processing>
+
+    <report>
+        <no-step-log value="true"/>
+    </report>
+</configuration>

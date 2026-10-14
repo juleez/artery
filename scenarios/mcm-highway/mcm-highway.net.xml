@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2026-10-14T11:44:06.923418+01:00 by Eclipse SUMO netconvert 1.28.0
+<netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+
+    <input>
+        <node-files value="mcm-highway.nod.xml"/>
+        <edge-files value="mcm-highway.edg.xml"/>
+    </input>
+
+    <output>
+        <output-file value="mcm-highway.net.xml"/>
+    </output>
+
+    <projection>
+        <proj value="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
+        <proj.inverse value="true"/>
+    </projection>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+    </junctions>
+
+</netconvertConfiguration>
+-->
+
+<net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+
+    <location netOffset="0.00,60.00" convBoundary="0.00,0.00,4000.00,60.00" origBoundary="0.000000,-60.000000,4000.000000,0.000000" projParameter="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
+
+    <edge id=":mergeIn_0" function="internal">
+        <lane id=":mergeIn_0_0" index="0" speed="27.77" length="3.26" width="3.50" shape="928.52,47.51 929.47,47.65 930.13,47.72 930.79,47.75 931.76,47.75"/>
+    </edge>
+    <edge id=":mergeIn_1" function="internal">
+        <lane id=":mergeIn_1_0" index="0" speed="33.33" length="3.26" width="3.50" shape="928.50,51.25 931.76,51.25"/>
+        <lane id=":mergeIn_1_1" index="1" speed="33.33" length="3.26" width="3.50" shape="928.50,54.75 931.76,54.75"/>
+        <lane id=":mergeIn_1_2" index="2" speed="33.33" length="3.26" width="3.50" shape="928.50,58.25 931.76,58.25"/>
+    </edge>
+    <edge id=":mergeOut_0" function="internal">
+        <lane id=":mergeOut_0_0" index="0" speed="33.33" length="8.00" width="3.50" shape="1296.00,51.25 1304.00,51.25"/>
+        <lane id=":mergeOut_0_1" index="1" speed="33.33" length="8.00" width="3.50" shape="1296.00,54.75 1304.00,54.75"/>
+        <lane id=":mergeOut_0_2" index="2" speed="33.33" length="8.00" width="3.50" shape="1296.00,58.25 1304.00,58.25"/>
+    </edge>
+
+    <edge id="hw0" from="start" to="mergeIn" priority="3">
+        <lane id="hw0_0" index="0" speed="33.33" length="928.50" width="3.50" shape="0.00,51.25 928.50,51.25"/>
+        <lane id="hw0_1" index="1" speed="33.33" length="928.50" width="3.50" shape="0.00,54.75 928.50,54.75"/>
+        <lane id="hw0_2" index="2" speed="33.33" length="928.50" width="3.50" shape="0.00,58.25 928.50,58.25"/>
+    </edge>
+    <edge id="hw1" from="mergeOut" to="end" priority="3">
+        <lane id="hw1_0" index="0" speed="33.33" length="2696.00" width="3.50" shape="1304.00,51.25 4000.00,51.25"/>
+        <lane id="hw1_1" index="1" speed="33.33" length="2696.00" width="3.50" shape="1304.00,54.75 4000.00,54.75"/>
+        <lane id="hw1_2" index="2" speed="33.33" length="2696.00" width="3.50" shape="1304.00,58.25 4000.00,58.25"/>
+    </edge>
+    <edge id="hwAcc" from="mergeIn" to="mergeOut" priority="3">
+        <lane id="hwAcc_0" index="0" speed="33.33" length="364.24" width="3.50" acceleration="1" shape="931.76,47.75 1296.00,47.75"/>
+        <lane id="hwAcc_1" index="1" speed="33.33" length="364.24" width="3.50" shape="931.76,51.25 1296.00,51.25"/>
+        <lane id="hwAcc_2" index="2" speed="33.33" length="364.24" width="3.50" shape="931.76,54.75 1296.00,54.75"/>
+        <lane id="hwAcc_3" index="3" speed="33.33" length="364.24" width="3.50" shape="931.76,58.25 1296.00,58.25"/>
+    </edge>
+    <edge id="ramp" from="rampStart" to="mergeIn" priority="2">
+        <lane id="ramp_0" index="0" speed="22.22" length="331.93" width="3.50" shape="600.26,-1.73 928.52,47.51"/>
+    </edge>
+
+    <junction id="end" type="dead_end" x="4000.00" y="60.00" incLanes="hw1_0 hw1_1 hw1_2" intLanes="" shape="4000.00,49.50 4000.00,60.00"/>
+    <junction id="mergeIn" type="priority" x="1000.00" y="60.00" incLanes="ramp_0 hw0_0 hw0_1 hw0_2" intLanes=":mergeIn_0_0 :mergeIn_1_0 :mergeIn_1_1 :mergeIn_1_2" shape="931.76,60.00 931.76,46.00 930.65,45.99 930.26,45.97 929.88,45.93 929.41,45.87 928.78,45.78 928.26,49.24 928.50,49.50 928.50,60.00">
+        <request index="0" response="0000" foes="0000" cont="0"/>
+        <request index="1" response="0000" foes="0000" cont="0"/>
+        <request index="2" response="0000" foes="0000" cont="0"/>
+        <request index="3" response="0000" foes="0000" cont="0"/>
+    </junction>
+    <junction id="mergeOut" type="priority" x="1300.00" y="60.00" incLanes="hwAcc_0 hwAcc_1 hwAcc_2 hwAcc_3" intLanes=":mergeOut_0_0 :mergeOut_0_1 :mergeOut_0_2" shape="1304.00,60.00 1304.00,49.50 1300.96,48.59 1299.04,46.91 1297.81,46.26 1296.00,46.00 1296.00,60.00">
+        <request index="0" response="000" foes="000" cont="0"/>
+        <request index="1" response="000" foes="000" cont="0"/>
+        <request index="2" response="000" foes="000" cont="0"/>
+    </junction>
+    <junction id="rampStart" type="dead_end" x="600.00" y="0.00" incLanes="" intLanes="" shape="600.00,-0.00 600.52,-3.46"/>
+    <junction id="start" type="dead_end" x="0.00" y="60.00" incLanes="" intLanes="" shape="0.00,60.00 0.00,49.50"/>
+
+    <connection from="hw0" to="hwAcc" fromLane="0" toLane="1" via=":mergeIn_1_0" dir="s" state="M"/>
+    <connection from="hw0" to="hwAcc" fromLane="1" toLane="2" via=":mergeIn_1_1" dir="s" state="M"/>
+    <connection from="hw0" to="hwAcc" fromLane="2" toLane="3" via=":mergeIn_1_2" dir="s" state="M"/>
+    <connection from="hwAcc" to="hw1" fromLane="1" toLane="0" via=":mergeOut_0_0" dir="s" state="M"/>
+    <connection from="hwAcc" to="hw1" fromLane="2" toLane="1" via=":mergeOut_0_1" dir="s" state="M"/>
+    <connection from="hwAcc" to="hw1" fromLane="3" toLane="2" via=":mergeOut_0_2" dir="s" state="M"/>
+    <connection from="ramp" to="hwAcc" fromLane="0" toLane="0" via=":mergeIn_0_0" dir="s" state="M"/>
+
+    <connection from=":mergeIn_0" to="hwAcc" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":mergeIn_1" to="hwAcc" fromLane="0" toLane="1" dir="s" state="M"/>
+    <connection from=":mergeIn_1" to="hwAcc" fromLane="1" toLane="2" dir="s" state="M"/>
+    <connection from=":mergeIn_1" to="hwAcc" fromLane="2" toLane="3" dir="s" state="M"/>
+    <connection from=":mergeOut_0" to="hw1" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":mergeOut_0" to="hw1" fromLane="1" toLane="1" dir="s" state="M"/>
+    <connection from=":mergeOut_0" to="hw1" fromLane="2" toLane="2" dir="s" state="M"/>
+
+</net>
