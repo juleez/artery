@@ -40,6 +40,8 @@ public:
     void finish() override;
     void trigger() override;
     void indicate(const vanetza::btp::DataIndication&, omnetpp::cPacket*) override;
+    using omnetpp::cListener::receiveSignal;
+    void receiveSignal(omnetpp::cComponent*, omnetpp::simsignal_t, const omnetpp::SimTime&, omnetpp::cObject*) override;
 
 protected:
     enum class State { Idle, Requesting, Accepted, Executing, Partner, Silent };
@@ -108,6 +110,10 @@ private:
     omnetpp::SimTime generationTimeOf(const McMessage&) const;
     bool isDropped(const McMessage&);
 
+    // last announced trajectory as arrow in sumo-gui (TraCI polygons)
+    void drawTrajectory(const McMessage&);
+    void eraseTrajectory();
+
     traci::VehicleController* mVehicleController = nullptr;
     const VehicleDataProvider* mVehicleDataProvider = nullptr;
     const Timer* mTimer = nullptr;
@@ -156,6 +162,9 @@ private:
     unsigned mPointBytes;
     unsigned mTrafficClass;
     bool mLogTransmissions;
+    bool mVisualizeTrajectory;
+    bool mTrajectoryDrawn = false;
+    bool mTraciClosed = false;
 
     // statistics
     unsigned mSentByPhase[4] = {};

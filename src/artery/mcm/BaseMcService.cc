@@ -5,6 +5,7 @@
 #include "artery/application/Timer.h"
 #include "artery/application/VehicleDataProvider.h"
 #include "artery/traci/VehicleController.h"
+#include "traci/API.h"
 #include <omnetpp/checkandcast.h>
 #include <vanetza/btp/data_request.hpp>
 #include <vanetza/common/byte_order.hpp>
@@ -90,6 +91,11 @@ void BaseMcService::initialize()
     mPointBytes = par("pointBytes");
     mTrafficClass = par("trafficClass");
     mLogTransmissions = par("logTransmissions");
+    mVisualizeTrajectory = par("visualizeTrajectory");
+    if (mVisualizeTrajectory) {
+        // polygons must not be removed any more once the TraCI connection is closed
+        getSystemModule()->subscribe("traci.close", this);
+    }
 
     if (mRequestTimeout > mLeadTime) {
         throw cRuntimeError("requestTimeout must not exceed leadTime (thesis Section 4.1)");
@@ -116,6 +122,10 @@ void BaseMcService::finish()
         // the vehicle may already have left SUMO, so do not touch it any more
         mVehicleGone = true;
         finishManeuver("unfinished", simTime());
+    }
+    if (mVisualizeTrajectory) {
+        eraseTrajectory();
+        getSystemModule()->unsubscribe("traci.close", this);
     }
     recordScalar("mcmSentIntent", mSentByPhase[MC_INTENT]);
     recordScalar("mcmSentRequest", mSentByPhase[MC_REQUEST]);
@@ -672,8 +682,99 @@ void BaseMcService::sendMcm(const McMessage& msg)
         out << "\n";
     }
 
+    if (mVisualizeTrajectory) {
+        if (packet->getCancel() || packet->getPointsArraySize() == 0) {
+            eraseTrajectory();
+        } else {
+            drawTrajectory(*packet);
+        }
+    }
+
     request(req, packet);
     mLastSent = simTime();
+}
+
+void BaseMcService::receiveSignal(cComponent*, simsignal_t, const SimTime&, cObject*)
+{
+    // only subscribed to traci.close
+    mTraciClosed = true;
+}
+
+void BaseMcService::drawTrajectory(const McMessage& msg)
+{
+    if (mTraciClosed) {
+        return;
+    }
+
+    libsumo::TraCIColor color;
+    double lineWidth = 0.25;
+    double headWidth = 1.6;
+    if (msg.getManeuverType() == MC_KEEP_LANE) {
+        color = msg.getPhase() == MC_ACCEPT ? libsumo::TraCIColor(0, 170, 210) : libsumo::TraCIColor(30, 70, 130);
+    } else {
+        color = msg.getPhase() == MC_REQUEST ? libsumo::TraCIColor(240, 150, 0) : libsumo::TraCIColor(140, 190, 30);
+        lineWidth = 0.4;
+        headWidth = 2.4;
+    }
+    const double headLength = 1.5 * headWidth;
+
+    // The net uses a transverse Mercator projection centred on it, so grid north
+    // equals true north up to a negligible convergence and the east/north offsets
+    // can be added to the converted reference position directly.
+    auto& api = *mVehicleController->getTraCI();
+    const Geo ref = mcm::referenceOf(msg);
+    const libsumo::TraCIPosition origin = api.convert2D(traci::TraCIGeoPosition { ref.longitude, ref.latitude });
+    std::vector<Enu> points { Enu {} };
+    for (unsigned i = 0; i < msg.getPointsArraySize(); ++i) {
+        const McTrajectoryPoint& p = msg.getPoints(i);
+        points.push_back(Enu { p.deltaEast * 0.01, p.deltaNorth * 0.01 });
+    }
+
+    // arrow head along the last segment, the line ends at its base
+    const Enu tip = points.back();
+    Enu direction = tip - points[points.size() - 2];
+    const double segment = mcm::length(direction);
+    direction = segment > 1e-3 ? (1.0 / segment) * direction : mcm::headingVector(mcm::headingOf(msg));
+    const Enu base = tip - headLength * direction;
+    const Enu side = Enu { direction.north, -direction.east };
+    points.back() = base;
+
+    auto toSumo = [&origin](const Enu& e) {
+        libsumo::TraCIPosition pos;
+        pos.x = origin.x + e.east;
+        pos.y = origin.y + e.north;
+        return pos;
+    };
+    libsumo::TraCIPositionVector line, head;
+    for (const Enu& e : points) {
+        line.value.push_back(toSumo(e));
+    }
+    head.value = { toSumo(tip), toSumo(base + 0.5 * headWidth * side), toSumo(base - 0.5 * headWidth * side) };
+
+    const std::string id = "mcm." + vehicleId();
+    if (mTrajectoryDrawn) {
+        api.polygon.setShape(id, line);
+        api.polygon.setColor(id, color);
+        api.polygon.setShape(id + ".head", head);
+        api.polygon.setColor(id + ".head", color);
+    } else {
+        api.polygon.add(id, line, color, false, "mcm", 100);
+        api.polygon.add(id + ".head", head, color, true, "mcm", 100);
+        mTrajectoryDrawn = true;
+    }
+    api.polygon.setLineWidth(id, lineWidth);
+}
+
+void BaseMcService::eraseTrajectory()
+{
+    if (!mTrajectoryDrawn || mTraciClosed) {
+        return;
+    }
+    auto& api = *mVehicleController->getTraCI();
+    const std::string id = "mcm." + vehicleId();
+    api.polygon.remove(id, 100);
+    api.polygon.remove(id + ".head", 100);
+    mTrajectoryDrawn = false;
 }
 
 SimTime BaseMcService::generationTimeOf(const McMessage& msg) const

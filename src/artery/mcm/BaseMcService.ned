@@ -56,4 +56,7 @@ simple BaseMcService like ItsG5Service
         // CSV records <logPrefix>-*.csv, disabled if empty
         string logPrefix = default("");
         bool logTransmissions = default(true);
+
+        // draw the last announced trajectory of each vehicle as arrow (TraCI polygons), only useful with sumo-gui
+        bool visualizeTrajectory = default(false);
 }
