@@ -207,7 +207,7 @@ void BaseMcService::trigger()
 
     if (!mStationLogged && mcm::McLog::instance().isOpen()) {
         // station id is assigned after initialization of the services
-        mcm::McLog::instance().stations() << stationId() << "," << vehicleId() << "," << getNedTypeName() << "\n";
+        mcm::McLog::instance().stations() << stationId() << "," << vehicleId() << "," << getNedTypeName() << std::endl;
         mStationLogged = true;
     }
 
@@ -314,6 +314,9 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
 
     bool blockedByUnknown = false;
     m.affected = conflictsOf(m.plan, keepLanePlan(now), now, now, blockedByUnknown);
+    m.affectedUnknown = blockedByUnknown;
+    m.lastConflicts = m.affected;
+    m.lastUnknown = blockedByUnknown;
     mManeuver = std::move(m);
 
     // the announced constant speed is held until the lane change is completed (thesis Section 5.2)
@@ -339,6 +342,8 @@ void BaseMcService::updateRequest(const SimTime& now)
 
     bool blockedByUnknown = false;
     const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    mManeuver.lastConflicts = conflicts;
+    mManeuver.lastUnknown = blockedByUnknown;
     bool granted = conflicts.empty() && !blockedByUnknown;
     if (granted && mExplicitResponses) {
         // every vehicle in conflict with the request has to agree, unless it has left the neighbourhood
@@ -390,6 +395,8 @@ void BaseMcService::updateCommitted(const SimTime& now)
     // last check before the lateral movement, as with the on-board sensors in TR 103 578 clause 5.2.3
     bool blockedByUnknown = false;
     const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    mManeuver.lastConflicts = conflicts;
+    mManeuver.lastUnknown = blockedByUnknown;
     if (!conflicts.empty() || blockedByUnknown) {
         finishManeuver("failed_gap", now);
         return;
@@ -418,6 +425,8 @@ void BaseMcService::updateExecution(const SimTime& now)
         bool blockedByUnknown = false;
         const auto conflicts = conflictsOf(mManeuver.plan, back, now, mManeuver.announced, blockedByUnknown);
         if (!conflicts.empty() || blockedByUnknown) {
+            mManeuver.lastConflicts = conflicts;
+            mManeuver.lastUnknown = blockedByUnknown;
             beginReturn("failed_conflict", true, now);
         }
     }
@@ -481,7 +490,8 @@ void BaseMcService::finishManeuver(const char* outcome, const SimTime& now)
             << mManeuver.announced.dbl() << "," << (mManeuver.committed == SimTime::ZERO ? -1.0 : mManeuver.committed.dbl()) << ","
             << mManeuver.plan.lat.start << "," << now.dbl() << "," << outcome << ","
             << mManeuver.negotiated << "," << joinIds(mManeuver.acks) << "," << joinIds(mManeuver.nacks) << ","
-            << mManeuver.laneChangeDuration << "," << mManeuver.execution.abortAfter << "\n";
+            << mManeuver.laneChangeDuration << "," << mManeuver.execution.abortAfter << ","
+            << mManeuver.affectedUnknown << "," << joinIds(mManeuver.lastConflicts) << "," << mManeuver.lastUnknown << std::endl;
     }
 
     mManeuver = Maneuver();
@@ -655,7 +665,7 @@ void BaseMcService::releaseYield(const char* outcome, const SimTime& now)
         log.maneuvers() << stationId() << "," << vehicleId() << "," << mReferenceId << ",yielder,"
             << static_cast<int>(MC_YIELD) << "," << mYield.requester << ","
             << mYield.since.dbl() << "," << mYield.since.dbl() << ",-1," << now.dbl() << "," << outcome << ","
-            << false << ",," << "," << "0,-1\n";
+            << false << ",," << "," << "0,-1,0,,0" << std::endl;
     }
 
     mYield = Yield();
@@ -689,7 +699,8 @@ void BaseMcService::logRequestDecision(const Neighbour& n, int state, const char
     } else {
         out << ",";
     }
-    out << "\n";
+    // few lines: flushed at once, so the file can be read while the simulation runs
+    out << std::endl;
 }
 
 void BaseMcService::respond(uint32_t requester, uint16_t requestId, bool accept, McResponseReason reason, const SimTime& now)

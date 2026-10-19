@@ -81,6 +81,9 @@ protected:
         omnetpp::SimTime committed;         //< request granted or no negotiation needed
         bool negotiated = false;            //< sent as requested trajectory
         std::set<uint32_t> affected;        //< vehicles in conflict when the request was sent
+        bool affectedUnknown = false;       //< a vehicle without MCM was in conflict when the request was sent
+        std::set<uint32_t> lastConflicts;   //< result of the last conflict check, logged when the manoeuvre ends
+        bool lastUnknown = false;
         std::set<uint32_t> acks;
         std::set<uint32_t> nacks;
         Execution execution;

@@ -21,9 +21,13 @@ void McLog::open(const std::string& prefix)
     mPrefix = prefix;
     openFile(mStations, "stations", "station_id,vehicle_id,service");
     // partners: vehicles in conflict with a request (requester) or the requester (yielder), separated by ';'
+    // unknown_start: a vehicle without MCM (own sensors) was in conflict when the request was sent;
+    // conflicts_end, unknown_end: result of the last conflict check of the requester
+    // (at the timeout, the last check before or during the lateral movement)
     openFile(mManeuvers, "maneuvers",
         "station_id,vehicle_id,maneuver_id,role,type,partners,"
-        "t_announce,t_commit,t_lateral_start,t_end,outcome,negotiated,acks,nacks,lane_change_duration,abort_after");
+        "t_announce,t_commit,t_lateral_start,t_end,outcome,negotiated,acks,nacks,lane_change_duration,abort_after,"
+        "unknown_start,conflicts_end,unknown_end");
     // decision of the partner: accepted, busy, cost or not_cooperative; state of the partner before the decision;
     // gap_longitudinal along the partner's heading (positive: requester ahead), offset_lateral positive to the left;
     // requester_speed from its basic container, requested_end_speed at the end of the requested trajectory;
