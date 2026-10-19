@@ -73,7 +73,7 @@ packet McMessage
     // reference trajectory: what the sender plans to drive
     uint16_t referenceId;           // changes with every new plan (unique per sender)
     uint8_t referenceType @enum(McManeuverType);
-    McTrajectoryPoint reference[];  // 250 ms spacing, 5 s horizon
+    McTrajectoryPoint reference[];  // 250 ms spacing, horizon set by the service (default 8 s)
 
     // requested trajectory, only present if requestedId != 0
     uint16_t requestedId;

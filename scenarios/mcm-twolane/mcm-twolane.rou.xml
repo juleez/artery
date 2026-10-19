@@ -9,8 +9,8 @@
      Rates are those of density 1.0; omnetpp.ini scales them with SUMO's scale option. -->
 <routes>
     <!-- automated: no driver imperfection; maxSpeedLat and lcAccelLat only bound the lateral
-         movement commanded by McService (quintic, 3.5 m in 1 s: 6.6 m/s, 20 m/s^2; SUMO only
-         follows such a profile exactly with lcAccelLat well above that) -->
+         movement commanded by McService (quintic, 3.5 m in 3 s: at most 2.2 m/s and 2.2 m/s^2);
+         they are set well above, so that SUMO follows the commanded profile exactly -->
     <vType id="auto" vClass="passenger" length="5" width="1.8" minGap="2.5" maxSpeed="45"
            accel="2.6" decel="4.5" sigma="0" tau="1.0"
            speedFactor="normc(1,0.15,0.7,1.3)"

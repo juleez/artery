@@ -74,6 +74,7 @@ protected:
         McManeuverType type = MC_KEEP_LANE;
         int direction = 0;                  //< +1 left, -1 right
         double originOffset = 0.0;          //< lateral offset from the origin lane centre at the start
+        double laneWidth = 0.0;             //< m, distance between origin and target lane centre
         double laneChangeDuration = 0.0;    //< s
         McPlan plan;                        //< lane change plan along the origin lane
         omnetpp::SimTime announced;         //< first MCM with this manoeuvre
@@ -144,6 +145,7 @@ private:
     void updateCommitted(const omnetpp::SimTime& now);
     void updateExecution(const omnetpp::SimTime& now);
     void beginReturn(const char* reason, bool announce, const omnetpp::SimTime& now);
+    McLateralProfile returnProfile(const omnetpp::SimTime& now) const;
     void finishManeuver(const char* outcome, const omnetpp::SimTime& now);
 
     // partner role

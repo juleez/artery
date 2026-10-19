@@ -26,14 +26,14 @@ simple BaseMcService like ItsG5Service
         double lateralDeviation @unit(m) = default(0.25m);
         double speedDeviation @unit(mps) = default(0.5mps);
 
-        // announced trajectories: 20 points at 250 ms, 5 s horizon
-        int numPoints = default(20);
+        // announced trajectories: 32 points at 250 ms, 8 s horizon (lead time and the longest lane change plus margin)
+        int numPoints = default(32);
         double pointSpacing @unit(s) = default(0.25s);
 
         // own lane changes
         double leadTime @unit(s) = default(1.0s);               // lane keeping before the lateral movement starts
         // drawn per lane change; leadTime + duration is limited to the trajectory horizon
-        volatile double laneChangeDuration @unit(s) = default(uniform(1s, 3s));
+        volatile double laneChangeDuration @unit(s) = default(uniform(3s, 6s));
         string lateralShape = default("quintic");               // linear, sinusoidal or quintic (S-shaped, minimum jerk)
         volatile double returnDuration @unit(s) = default(2s);  // back into the origin lane after an abort
         double lateralLookahead @unit(s) = default(0.1s);       // one update interval: SUMO applies a command in the next step
@@ -54,7 +54,7 @@ simple BaseMcService like ItsG5Service
         bool explicitResponses = default(false);
         double responseLifetime @unit(s) = default(1s);         // an answer is repeated while the request persists
         double neighbourTimeout @unit(s) = default(1.5s);       // trajectories of silent neighbours are discarded
-        double requestRange @unit(m) = default(150m);           // vehicles further away are not checked for conflicts
+        double requestRange @unit(m) = default(200m);           // vehicles further away are not checked for conflicts
         double checkStep @unit(s) = default(0.25s);             // time resolution of the conflict check
         // conflict: lateral overlap (plus margin) and gap below minGap + headway * speed of the follower
         double conflictMinGap @unit(m) = default(2.5m);

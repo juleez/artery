@@ -5,9 +5,9 @@
      All vehicles are automated (SAE level 4, see thesis Section 4.1), hence sigma=0:
      no driver imperfection, the remaining deviation from an announced trajectory
      comes from traffic and from the vehicle controller.
-     maxSpeedLat and lcAccelLat only bound the lateral movement commanded by McService:
-     a quintic lane change over 3.5 m in 1 s needs 6.6 m/s and 20 m/s^2; SUMO only
-     follows such a profile exactly with lcAccelLat well above that. -->
+     maxSpeedLat and lcAccelLat only bound the lateral movement commanded by McService
+     (quintic, 3.5 m in 3 s: at most 2.2 m/s and 2.2 m/s^2); they are set well above,
+     so that SUMO follows the commanded profile exactly. -->
 <routes>
     <vType id="car" vClass="passenger" length="5" width="1.8" minGap="2.5" maxSpeed="40"
            accel="2.6" decel="4.5" sigma="0" tau="1.0"

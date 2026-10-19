@@ -11,7 +11,7 @@ Scenario for the trajectory misbehavior detector (thesis Chapter 6).
 - all vehicles are automated (`sigma=0`) and equipped with CA service and `McService`
 - SUMO's sublane model (`lateral-resolution` in the sumocfg): `McService` drives the lateral
   movement of every lane change itself, S-shaped (quintic) with a duration drawn from
-  `laneChangeDuration` (default uniform 1 to 3 s), and can abort it at any time
+  `laneChangeDuration` (default uniform 3 to 6 s), and can abort it at any time
 
 The straight road keeps curvature out of the error measures; the ramp and the speed
 spread produce strategic merges, speed gain and keep right lane changes. A warm-up of
@@ -37,7 +37,7 @@ optionally answer with ACK/NACK (`explicitResponses`).
 | `ground-truth` | honest traffic, SUMO writes FCD (driven trajectories) next to the MCM logs |
 | `density` | honest traffic at density 0.5, 1.0 and 1.5 |
 | `negotiation` | implicit answers (base concept) against explicit ACK/NACK, density 1.0 and 1.5 |
-| `lane-change-duration` | fixed lane change durations of 1, 2 and 3 s, quintic and linear shape |
+| `lane-change-duration` | fixed lane change durations of 3, 4.5 and 6 s, quintic and linear shape |
 | `legitimate-deviations` | sweep of abort probability, announced/silent abort and drop probability |
 
 ## Output
@@ -48,7 +48,7 @@ Besides the usual `.sca` files, `McService` writes CSV files to `results/`:
 - `<config>-<run>-maneuvers.csv`: one line per manoeuvre (requester) or cooperation (yielder)
   with partners, timing, outcome, answers, lane change duration and abort time
 - `<config>-<run>-mcm-tx.csv`: every transmitted MCM with reference and requested trajectory
-  (`timeOffset:deltaEast:deltaNorth:speed:heading` in ms, cm, cm, cm/s, 0.1 degree)
+  (32 points at 250 ms, `timeOffset:deltaEast:deltaNorth:speed:heading` in ms, cm, cm, cm/s, 0.1 degree)
   and explicit responses (`station:trajectory:accept:reason`)
 
 `analysis/announcement_error.py` compares the announced reference trajectories with the FCD

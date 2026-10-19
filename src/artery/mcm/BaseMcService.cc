@@ -305,6 +305,7 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
     m.plan = mPlanner->planLane(lane, now.dbl(), pathLength);
     m.plan.type = type;
     m.originOffset = m.plan.lat.d0;
+    m.laneWidth = width;
     m.plan.lat.delta = direction * width - m.plan.lat.d0;
     m.plan.lat.start = (now + mLeadTime).dbl();
     m.plan.lat.duration = m.laneChangeDuration;
@@ -406,8 +407,22 @@ void BaseMcService::updateExecution(const SimTime& now)
         beginReturn(execution.announce ? "aborted_announced" : "aborted_silent", execution.announce, now);
     }
 
-    // SUMO refuses lateral movements which would cause a collision: detect a lane change which lags behind
     const double actual = mPlanner->project(mManeuver.plan, mPlanner->vehiclePosition()).lateral;
+
+    // monitoring until the lane boundary is crossed: predictions of others may have been wrong
+    // (acceleration, own lane changes of vehicles without MCM); return while that is still possible
+    const bool beforeBoundary = mManeuver.direction * (actual - mManeuver.originOffset) < 0.5 * mManeuver.laneWidth;
+    if (!mManeuver.aborting && beforeBoundary) {
+        McPlan back = mManeuver.plan;
+        back.lat = returnProfile(now);
+        bool blockedByUnknown = false;
+        const auto conflicts = conflictsOf(mManeuver.plan, back, now, mManeuver.announced, blockedByUnknown);
+        if (!conflicts.empty() || blockedByUnknown) {
+            beginReturn("failed_conflict", true, now);
+        }
+    }
+
+    // SUMO refuses lateral movements which would cause a collision: detect a lane change which lags behind
     const double planned = mManeuver.plan.lat.offset(now.dbl());
     if (std::abs(actual - planned) > mLateralTolerance) {
         if (mManeuver.blockedSince == SimTime::ZERO) {
@@ -426,14 +441,22 @@ void BaseMcService::updateExecution(const SimTime& now)
     }
 }
 
-void BaseMcService::beginReturn(const char* reason, bool announce, const SimTime& now)
+McLateralProfile BaseMcService::returnProfile(const SimTime& now) const
 {
     McLateralProfile back;
     back.d0 = mPlanner->project(mManeuver.plan, mPlanner->vehiclePosition()).lateral;
     back.delta = mManeuver.originOffset - back.d0;
     back.start = now.dbl();
-    back.duration = std::max(0.5, par("returnDuration").doubleValue());
+    // the duration of the return is fixed when it begins, see beginReturn
+    back.duration = 2.0;
     back.shape = mLateralShape;
+    return back;
+}
+
+void BaseMcService::beginReturn(const char* reason, bool announce, const SimTime& now)
+{
+    McLateralProfile back = returnProfile(now);
+    back.duration = std::max(0.5, par("returnDuration").doubleValue());
     mManeuver.plan.lat = back;
     mManeuver.aborting = true;
     mManeuver.abortReason = reason;
