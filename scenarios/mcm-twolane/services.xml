@@ -4,19 +4,13 @@
     <service type="artery.application.CaService" name="CA">
         <listener port="2001" />
         <filters>
-            <name pattern="(coop|noncoop)_.*" />
+            <name pattern="coop_.*" />
         </filters>
     </service>
     <service type="artery.mcm.McService" name="MCS">
         <listener port="2050" />
         <filters>
             <name pattern="coop_.*" />
-        </filters>
-    </service>
-    <service type="artery.mcm.NonCooperativeMcService" name="MCS">
-        <listener port="2050" />
-        <filters>
-            <name pattern="noncoop_.*" />
         </filters>
     </service>
 </services>

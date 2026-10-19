@@ -1,7 +1,8 @@
 # mcm-twolane
 
 Mixed traffic on a two-lane motorway: more lane changes than in `mcm-highway`, and not every
-vehicle is automated, connected or cooperative.
+vehicle is connected. A vehicle either runs the cooperative MCM service or sends no V2X
+messages at all.
 
 ## Road and traffic
 
@@ -13,8 +14,7 @@ vehicle is automated, connected or cooperative.
 
 | Category | Share | Equipment | Behaviour |
 |---|---|---|---|
-| `coop_*` | 47 % | CA, `McService` | automated, yields to requested trajectories |
-| `noncoop_*` | 13 % | CA, `NonCooperativeMcService` | automated, shares its plans but never yields |
+| `coop_*` | 60 % | CA, `McService` | automated, yields to requested trajectories |
 | `manual_*` | 26 % | none | human driven (`sigma=0.5`), lane changes by SUMO's sublane model |
 | `truck_*` | 13 % | none | human driven trucks at 80 km/h, reason for overtaking |
 

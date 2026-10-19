@@ -34,7 +34,9 @@ class VehicleDataProvider;
  *   trajectory conflicts with the request decide whether they adapt their plan
  *   (yield). In the base concept the adapted reference trajectory is the only answer
  *   and the requester checks for itself whether its request has become conflict free;
- *   with explicitResponses the extension of the TR adds ACK/NACK per requested trajectory
+ *   with explicitResponses the extension of the TR adds ACK/NACK per requested trajectory.
+ *   A yielder judges requests with a margin on gap and headway (yieldMargin*), so that
+ *   its adapted plan also passes the requester's check (hysteresis)
  * - the request is withdrawn when it has not been granted within requestTimeout
  *
  * Lane changes are not decided by SUMO itself: autonomous lane changes are switched
@@ -100,9 +102,6 @@ protected:
      */
     virtual Execution decideExecution(const Maneuver&) { return Execution(); }
 
-    /** whether this vehicle adapts its plan for requested trajectories of others at all */
-    virtual bool isCooperative() const { return true; }
-
     /** last chance to modify an MCM before it is sent (e.g. falsified trajectories) */
     virtual void beforeSend(McMessage&) {}
 
@@ -165,6 +164,7 @@ private:
     std::set<uint32_t> conflictsOf(const McPlan& plan, const McPlan& keep, const omnetpp::SimTime& now,
             const omnetpp::SimTime& requestTime, bool& blockedByUnknown) const;
     /** true if a requested trajectory of another vehicle conflicts with the own plan */
+    /** the requested trajectory of n conflicts with own, judged with the stricter rules of the yielder */
     bool affectedBy(const Neighbour&, const McPlan& own, const omnetpp::SimTime& now) const;
     bool findYieldPlan(const Neighbour&, const omnetpp::SimTime& now, Yield&, McPlan&) const;
 
@@ -245,6 +245,7 @@ private:
     double mCheckStep;
     double mRequestRange;
     mcm::ConflictRules mConflictRules;
+    mcm::ConflictRules mYieldRules;     //< mConflictRules plus the yield margin
     double mMaxYieldDeceleration;
     double mMaxYieldAcceleration;
     double mMaxYieldSpeedLoss;
@@ -267,7 +268,6 @@ private:
     unsigned mRequestsAccepted = 0;
     unsigned mRequestsDeclinedBusy = 0;
     unsigned mRequestsDeclinedCost = 0;
-    unsigned mRequestsDeclinedNotCooperative = 0;
 };
 
 } // namespace artery

@@ -35,7 +35,6 @@ enum McResponseReason
     MC_RESPONSE_ACCEPT = 0;
     MC_RESPONSE_BUSY = 1;           // own manoeuvre or already cooperating
     MC_RESPONSE_COST = 2;           // required adaptation exceeds own limits
-    MC_RESPONSE_NOT_COOPERATIVE = 3;
 }
 
 struct McTrajectoryPoint

@@ -4,7 +4,6 @@ add_artery_feature(mcm
     McLog.cc
     McService.cc
     McTrajectoryPlanner.cc
-    NonCooperativeMcService.cc
 )
 
 add_opp_message(mcm-message MESSAGE Mcm.msg)

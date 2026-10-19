@@ -49,7 +49,7 @@ Besides the usual `.sca` files, `McService` writes CSV files to `results/`:
   with partners, timing, outcome, answers, lane change duration and abort time, and whether vehicles
   without MCM (`unknown_*`) or which MCM vehicles (`conflicts_end`) blocked the last conflict check
 - `<config>-<run>-requests.csv`: one line per decision of a vehicle in conflict with a requested
-  trajectory (`accepted`, `busy`, `cost`, `not_cooperative`) with its state, distance, gap along and
+  trajectory (`accepted`, `busy`, `cost`) with its state, distance, gap along and
   offset across its heading, both speeds and the chosen yield (target speed, acceleration)
 - `<config>-<run>-mcm-tx.csv`: every transmitted MCM with reference and requested trajectory
   (32 points at 250 ms, `timeOffset:deltaEast:deltaNorth:speed:heading` in ms, cm, cm, cm/s, 0.1 degree)

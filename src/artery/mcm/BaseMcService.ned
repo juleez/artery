@@ -60,6 +60,10 @@ simple BaseMcService like ItsG5Service
         double conflictMinGap @unit(m) = default(2.5m);
         double conflictHeadway @unit(s) = default(1.0s);
         double conflictLateralMargin @unit(m) = default(0.3m);
+        // a yielder checks requests and its own adaptation with gap and headway increased by these
+        // margins, so that the adapted plan also satisfies the check of the requester (hysteresis)
+        double yieldMarginGap @unit(m) = default(2m);
+        double yieldMarginHeadway @unit(s) = default(0.5s);
         // limits of a yielding vehicle
         double maxYieldDeceleration @unit(mpss) = default(3mpss);
         double maxYieldAcceleration @unit(mpss) = default(0mpss);   // 0: yielding only by braking

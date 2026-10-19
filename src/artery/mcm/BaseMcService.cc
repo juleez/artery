@@ -115,6 +115,9 @@ void BaseMcService::initialize()
     mConflictRules.minGap = par("conflictMinGap");
     mConflictRules.headway = par("conflictHeadway");
     mConflictRules.lateralMargin = par("conflictLateralMargin");
+    mYieldRules = mConflictRules;
+    mYieldRules.minGap += par("yieldMarginGap").doubleValue();
+    mYieldRules.headway += par("yieldMarginHeadway").doubleValue();
     mMaxYieldDeceleration = par("maxYieldDeceleration");
     mMaxYieldAcceleration = par("maxYieldAcceleration");
     mMaxYieldSpeedLoss = par("maxYieldSpeedLoss");
@@ -183,7 +186,6 @@ void BaseMcService::finish()
     recordScalar("requestsAccepted", mRequestsAccepted);
     recordScalar("requestsDeclinedBusy", mRequestsDeclinedBusy);
     recordScalar("requestsDeclinedCost", mRequestsDeclinedCost);
-    recordScalar("requestsDeclinedNotCooperative", mRequestsDeclinedNotCooperative);
     if (mcm::McLog::instance().isOpen()) {
         mcm::McLog::instance().flush();
     }
@@ -535,12 +537,6 @@ void BaseMcService::handleRequest(const Neighbour& n, const SimTime& now)
     mEvaluatedRequests.insert(key);
     const int state = static_cast<int>(mState);
 
-    if (!isCooperative()) {
-        ++mRequestsDeclinedNotCooperative;
-        logRequestDecision(n, state, "not_cooperative", nullptr, now);
-        respond(requester, requestId, false, MC_RESPONSE_NOT_COOPERATIVE, now);
-        return;
-    }
     if (mState != State::Idle) {
         ++mRequestsDeclinedBusy;
         logRequestDecision(n, state, "busy", nullptr, now);
@@ -839,7 +835,11 @@ bool BaseMcService::affectedBy(const Neighbour& n, const McPlan& own, const SimT
         // the requester is the reference body: conflicts are judged along its heading
         const Body moving = neighbourBody(n, requested, origin, times[i]);
         const Body keeping = neighbourBody(n, reference, origin, times[i]);
-        if (mcm::conflicts(moving, mine[i], mConflictRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
+        // the yielder judges the request with a margin on top of the rules of the requester: both
+        // know the other only from its last MCM (age, 250 ms points), and the smallest sufficient
+        // adaptation would otherwise leave the requester's own check at the edge (hysteresis);
+        // conflicts of ordinary car following are excluded with the rules of the requester
+        if (mcm::conflicts(moving, mine[i], mYieldRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
             return true;
         }
     }
