@@ -397,8 +397,9 @@ std::vector<mcm::Body> McTrajectoryPlanner::footprints(const McPlan& plan, const
         const mcm::Enu secant = ahead - body.front;
         TraCIPosition tangent;
         plan.at(t, &tangent);
-        body.heading = mcm::length(secant) > 1e-3 ? mcm::headingOf(secant) :
-            mcm::headingOf(tangent.x * f.unitX + tangent.y * f.unitY);
+        const double road = mcm::headingOf(tangent.x * f.unitX + tangent.y * f.unitY);
+        body.heading = mcm::length(secant) > 1e-3 ? mcm::headingOf(secant) : road;
+        body.roadHeading = road;
         body.speed = plan.lon.speed(t - plan.t0);
         body.length = length;
         body.width = width;

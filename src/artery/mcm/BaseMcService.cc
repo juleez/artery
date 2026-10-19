@@ -1013,7 +1013,7 @@ bool BaseMcService::affectedBy(const Neighbour& n, const McPlan& own, const SimT
     const Geo origin = mPlanner->vehicleGeo();
     const auto mine = mPlanner->footprints(own, times, mLength, mWidth);
     for (std::size_t i = 0; i < times.size(); ++i) {
-        // the requester is the reference body: conflicts are judged along its heading
+        // the requester is the reference body (follower rule), the frame is the own road direction
         const Body moving = neighbourBody(n, requested, origin, times[i]);
         const Body keeping = neighbourBody(n, reference, origin, times[i]);
         // the yielder judges the request with a margin on top of the rules of the requester: both

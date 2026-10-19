@@ -177,15 +177,16 @@ TrajectorySample sampleExtrapolated(const McPoints& points, double t)
 
 bool conflicts(const Body& a, const Body& b, const ConflictRules& rules)
 {
-    const Enu forward = headingVector(a.heading);
-    const Enu left = leftVector(a.heading);
+    const double frame = a.roadHeading >= 0.0 ? a.roadHeading : (b.roadHeading >= 0.0 ? b.roadHeading : a.heading);
+    const Enu forward = headingVector(frame);
+    const Enu left = leftVector(frame);
     const Enu delta = b.front - a.front;
     const double lateral = dot(delta, left);
     if (std::abs(lateral) >= 0.5 * (a.width + b.width) + rules.lateralMargin) {
         return false;
     }
 
-    // longitudinal extents along the heading of a: a in [-length, 0], b in [front - length, front]
+    // longitudinal extents along the road: a in [-length, 0], b in [front - length, front]
     const double bFront = dot(delta, forward);
     const double bRear = bFront - b.length;
     if (bRear >= 0.0) {

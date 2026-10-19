@@ -91,7 +91,8 @@ double horizonOf(const McPoints&);
 struct Body
 {
     Enu front;
-    double heading = 0.0;   //< degree, clockwise from north
+    double heading = 0.0;   //< degree, clockwise from north, direction of travel
+    double roadHeading = -1.0;  //< degree, direction of the lane centre line; negative if unknown
     double speed = 0.0;     //< m/s
     double length = 5.0;    //< m
     double width = 1.8;     //< m
@@ -105,9 +106,12 @@ struct ConflictRules
 };
 
 /**
- * True if two bodies are too close: their lateral extents (along the heading of a)
- * overlap and the longitudinal gap is below minGap + headway * speed of the follower.
- * Headings are assumed to be nearly parallel (motorway traffic).
+ * True if two bodies are too close: their lateral extents overlap and the longitudinal
+ * gap is below minGap + headway * speed of the follower. Both are judged parallel to the
+ * road (roadHeading of a, else of b, else the heading of a): during a lane change the
+ * heading is tilted by a few degrees, which would shift distant vehicles sideways by
+ * the distance times the tangent of that angle. Headings are assumed to be nearly
+ * parallel (motorway traffic).
  */
 bool conflicts(const Body& a, const Body& b, const ConflictRules&);
 
