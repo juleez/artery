@@ -47,6 +47,9 @@ Besides the usual `.sca` files, `McService` writes CSV files to `results/`:
 - `<config>-<run>-stations.csv`: station id, SUMO id and service type (ground truth for attackers)
 - `<config>-<run>-maneuvers.csv`: one line per manoeuvre (requester) or cooperation (yielder)
   with partners, timing, outcome, answers, lane change duration and abort time
+- `<config>-<run>-requests.csv`: one line per decision of a vehicle in conflict with a requested
+  trajectory (`accepted`, `busy`, `cost`, `not_cooperative`) with its state, distance, gap along and
+  offset across its heading, both speeds and the chosen yield (target speed, acceleration)
 - `<config>-<run>-mcm-tx.csv`: every transmitted MCM with reference and requested trajectory
   (32 points at 250 ms, `timeOffset:deltaEast:deltaNorth:speed:heading` in ms, cm, cm, cm/s, 0.1 degree)
   and explicit responses (`station:trajectory:accept:reason`)

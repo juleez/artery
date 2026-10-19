@@ -523,14 +523,17 @@ void BaseMcService::handleRequest(const Neighbour& n, const SimTime& now)
         return; // no conflict with the own plan (yet), evaluated again with the next repetition
     }
     mEvaluatedRequests.insert(key);
+    const int state = static_cast<int>(mState);
 
     if (!isCooperative()) {
         ++mRequestsDeclinedNotCooperative;
+        logRequestDecision(n, state, "not_cooperative", nullptr, now);
         respond(requester, requestId, false, MC_RESPONSE_NOT_COOPERATIVE, now);
         return;
     }
     if (mState != State::Idle) {
         ++mRequestsDeclinedBusy;
+        logRequestDecision(n, state, "busy", nullptr, now);
         respond(requester, requestId, false, MC_RESPONSE_BUSY, now);
         return;
     }
@@ -539,11 +542,13 @@ void BaseMcService::handleRequest(const Neighbour& n, const SimTime& now)
     McPlan plan;
     if (!findYieldPlan(n, now, yield, plan)) {
         ++mRequestsDeclinedCost;
+        logRequestDecision(n, state, "cost", nullptr, now);
         respond(requester, requestId, false, MC_RESPONSE_COST, now);
         return;
     }
 
     ++mRequestsAccepted;
+    logRequestDecision(n, state, "accepted", &yield, now);
     const double speed = mPlanner->vehicleSpeed();
     mYield = yield;
     mYield.startSpeed = speed;
@@ -659,6 +664,32 @@ void BaseMcService::releaseYield(const char* outcome, const SimTime& now)
         releaseSpeed();
         setReference(keepLanePlan(now), MC_KEEP_LANE, now);
     }
+}
+
+void BaseMcService::logRequestDecision(const Neighbour& n, int state, const char* decision, const Yield* yield,
+    const SimTime& now) const
+{
+    auto& log = mcm::McLog::instance();
+    if (!log.isOpen()) {
+        return;
+    }
+    // position of the requester at the generation of its MCM, relative to the own position
+    const Enu offset = mcm::toEnu(geoOf(*mVehicleDataProvider), mcm::referenceOf(*n.msg));
+    const double heading = headingDegrees(*mVehicleDataProvider);
+    const McPoints requested = mcm::requestedPoints(*n.msg);
+    auto& out = log.requests();
+    out << now.dbl() << "," << stationId() << "," << vehicleId() << "," << stateName(state) << ","
+        << n.msg->getStationId() << "," << n.msg->getRequestedId() << "," << static_cast<int>(n.msg->getRequestedType()) << ","
+        << decision << "," << mcm::length(offset) << ","
+        << mcm::dot(offset, mcm::headingVector(heading)) << "," << mcm::dot(offset, mcm::leftVector(heading)) << ","
+        << mPlanner->vehicleSpeed() << "," << n.msg->getSpeed() * 0.01 << ","
+        << (requested.empty() ? 0.0 : requested.back().speed * 0.01) << ",";
+    if (yield) {
+        out << yield->targetSpeed << "," << yield->deceleration;
+    } else {
+        out << ",";
+    }
+    out << "\n";
 }
 
 void BaseMcService::respond(uint32_t requester, uint16_t requestId, bool accept, McResponseReason reason, const SimTime& now)

@@ -31,6 +31,8 @@ public:
     std::ofstream& stations() { return mStations; }
     /** one line per maneuver when it ends */
     std::ofstream& maneuvers() { return mManeuvers; }
+    /** one line per decision of a vehicle in conflict with a requested trajectory */
+    std::ofstream& requests() { return mRequests; }
     /** one line per transmitted MCM including its trajectory */
     std::ofstream& transmissions() { return mTransmissions; }
 
@@ -41,6 +43,7 @@ private:
     std::string mPrefix;
     std::ofstream mStations;
     std::ofstream mManeuvers;
+    std::ofstream mRequests;
     std::ofstream mTransmissions;
 };
 

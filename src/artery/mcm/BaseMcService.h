@@ -153,6 +153,7 @@ private:
     void updateYield(const omnetpp::SimTime& now);
     void releaseYield(const char* outcome, const omnetpp::SimTime& now);
     void respond(uint32_t requester, uint16_t requestId, bool accept, McResponseReason, const omnetpp::SimTime& now);
+    void logRequestDecision(const Neighbour&, int state, const char* decision, const Yield*, const omnetpp::SimTime& now) const;
 
     // conflicts
     std::vector<double> checkTimes(const omnetpp::SimTime& now, double until) const;
