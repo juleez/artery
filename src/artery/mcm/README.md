@@ -80,11 +80,11 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
    Verglichen wird jeder Kandidat mit „Spur halten mit derselben Geschwindigkeitsänderung“. Es zählen also nur Konflikte, die die Querbewegung verursacht; ein Folgefahrzeug in der eigenen Spur passt sich einer Verzögerung an wie jedem anderen Bremsen. Ein beschleunigender Kandidat darf dagegen in der eigenen Spur mit niemandem vor ihm in Konflikt geraten.
 
    Die Kandidaten werden nach Aufwand sortiert: ein Geschwindigkeitsschritt zählt wie 1 s zusätzlicher Vorlauf, bei Gleichstand kommt Bremsen vor Beschleunigen. Bei einem Merge muss die Spurgrenze vor dem Ende der Einfädelspur überquert werden, sonst fällt der Kandidat weg (außer der Grundplan ohne Änderung).
-   - Der erste **konfliktfreie** Kandidat wird ohne Verhandlung sofort zur Referenztrajektorie (`Committed`).
+   - Der erste Kandidat, der **mit Entscheidungsmarge** konfliktfrei ist (siehe Abschnitt 8), wird ohne Verhandlung sofort zur Referenztrajektorie (`Committed`). Ein Kandidat, der nur mit den normalen Regeln konfliktfrei ist, wird angefragt, weil ihn die kleinste Abweichung anderer sonst während der Querbewegung abbrechen lässt.
    - Gibt es keinen, wird der Kandidat **angefragt**, der am wenigsten Kooperation braucht: zuerst ohne Blockade durch ein Fahrzeug ohne MCM, dann mit möglichst wenigen betroffenen MCM-Fahrzeugen.
 3. **Längsführung.** Eine gewählte Geschwindigkeitsänderung fährt das Fahrzeug ab der Ankündigung, also schon während der Anfrage. Die Regelung schließt in jedem Schritt die Schleife: `setSpeed` auf die Geschwindigkeit des nächsten Schritts. Die Referenztrajektorie während der Anfrage ist „Spur halten mit dieser Geschwindigkeitsänderung“. Ohne Änderung wird die Geschwindigkeit konstant gehalten (Kap. 5.2). Nach dem Manöver übernimmt SUMO wieder.
 4. **Anfrage** (`Requesting`). In jedem Schritt prüft der Requester seinen Plan gegen die empfangenen Referenztrajektorien und gegen wahrgenommene Fahrzeuge ohne MCM.
-   - Konfliktfrei heißt implizit zugesagt, das Manöver geht nach `Committed`.
+   - Konfliktfrei mit **halber** Entscheidungsmarge heißt implizit zugesagt, das Manöver geht nach `Committed`.
    - Bei `explicitResponses` sind zusätzlich ACKs aller Betroffenen nötig, ein NACK beendet die Anfrage sofort.
    - Nach `requestTimeout` (0,5 s) wird die Anfrage zurückgezogen.
 5. **Letzte Prüfung vor dem Start der Querbewegung.** Gibt es jetzt einen Konflikt, endet das Manöver mit `failed_gap`. Hier entscheidet auch `decideExecution()`, ob und wie weit gefahren wird.
@@ -101,7 +101,7 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
    - innerhalb davon die kleinste Verzögerung (0,5 bis 3 m/s²) oder Beschleunigung (0,5 bis 1 m/s², `maxYieldAcceleration`, bis höchstens `accelerationLimit`).
 
    Ein beschleunigender Plan darf außer mit dem Requester mit niemandem in Konflikt geraten, z. B. nicht mit dem eigenen Vorderfahrzeug (`freeAhead`). Gibt es keinen passenden Plan → `cost`.
-4. **Hysterese:** Der Yielder prüft „betroffen“ und den Yield-Plan mit **strengeren** Regeln als der Requester: +`yieldMarginGap` (2 m) und +`yieldMarginHeadway` (0,5 s). Grund: Beide kennen sich nur aus der letzten MCM (Alter, Stützpunkte im Abstand von 250 ms, gerundete Positionen). Ohne Reserve hatte der Yielder die kleinste gerade ausreichende Verzögerung gewählt, und die Prüfung des Requesters ist trotzdem gescheitert. Vorher führte keine Zusage zu einem Spurwechsel, danach rund ein Drittel; die übrigen scheitern an anderen Partnern oder an Fahrzeugen ohne MCM.
+4. **Hysterese:** Der Yielder prüft „betroffen“ und den Yield-Plan mit der vollen Entscheidungsmarge, der Requester die Zusage nur mit der halben (Abschnitt 8). Grund: Beide kennen sich nur aus der letzten MCM (Alter, Stützpunkte im Abstand von 250 ms, gerundete Positionen). Ohne Reserve hatte der Yielder die kleinste gerade ausreichende Verzögerung gewählt, und die Prüfung des Requesters ist trotzdem gescheitert. Vorher führte keine Zusage zu einem Spurwechsel, danach rund ein Drittel; die übrigen scheitern an anderen Partnern oder an Fahrzeugen ohne MCM.
 5. **Ausführung:** `slowDown` auf die Zielgeschwindigkeit, danach `setSpeed` halten. Die Referenztrajektorie ist vom Typ `YIELD`. Das Nachgeben endet, sobald der Requester weder anfragt noch das Manöver fährt. War das Manöver schon zugesagt, ist das Ergebnis `partner_done`, sonst `partner_released`. Spätestens endet es, wenn der Horizont der Anfrage abgelaufen ist (`partner_expired`).
 
 ## 8. Konfliktprüfung
@@ -111,6 +111,18 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
 - **Nur durch das Manöver verursachte Konflikte zählen:** Ein Zeitpunkt zählt nur, wenn der Manöverplan in Konflikt steht, der Plan „Spur halten“ dagegen nicht. Normales Folgefahren erzeugt also keine Anfrage.
 - **Fremde Trajektorien:** Sie werden linear zwischen den Punkten interpoliert und nach dem Horizont mit konstanter Geschwindigkeit extrapoliert. Nachbarn, die länger als `neighbourTimeout` (1,5 s) still sind, werden verworfen.
 - **Fahrzeuge ohne MCM:** Sie kommen aus dem Umgebungsmodell, mit konstanter Geschwindigkeit vorhergesagt. Ein Radarobjekt, das weniger als 3 m von der aktuellen Position eines MCM-Nachbarn entfernt ist, gilt als dieser Nachbar. Ein Konflikt mit einem solchen Fahrzeug setzt `blockedByUnknown`, und kein MCM-Partner kann ihn auflösen.
+
+### Hysterese: drei Stufen
+
+Jede Seite kennt die andere nur aus deren letzter MCM. Würden alle Prüfungen mit denselben Regeln laufen, entschiede jede kleine Abweichung zufällig über das Ergebnis. Deshalb gibt es drei Stufen, festgelegt über `decisionMarginGap` (2 m) und `decisionMarginHeadway` (0,5 s):
+
+| Stufe | Regeln | wo |
+|---|---|---|
+| Entscheidung | normal + volle Marge (`mDecisionRules`) | Yielder: „bin ich betroffen?“, Wahl des Yield-Plans, Prüfung „frei voraus“ beim Beschleunigen; Requester: Spurwechsel ohne Verhandlung übernehmen, Beschleunigen in der eigenen Spur |
+| Zusage | normal + halbe Marge (`mGrantRules`) | Requester: implizite Zusage während der Anfrage |
+| Überwachung | normal (`mConflictRules`) | letzte Prüfung vor dem Start, laufende Prüfung bis zur Spurgrenze |
+
+Der Vergleichsplan „Spur halten“ wird immer mit den normalen Regeln geprüft.
 
 ## 9. Legitime Abweichungen (`McService`, Kap. 5.3)
 
@@ -146,7 +158,7 @@ Angreifer leiten von `BaseMcService` oder `McService` ab. Der Detektor bekommt e
 | `explicitResponses` | false | ACK/NACK-Erweiterung |
 | `requestRange` | 200 m | Reichweite der Konfliktprüfung |
 | `conflictMinGap`, `conflictHeadway`, `conflictLateralMargin` | 2,5 m, 1 s, 0,3 m | Konfliktregel |
-| `yieldMarginGap`, `yieldMarginHeadway` | 2 m, 0,5 s | Hysterese des Yielders |
+| `decisionMarginGap`, `decisionMarginHeadway` | 2 m, 0,5 s | Hysterese (Entscheidung volle, Zusage halbe Marge) |
 | `maxYieldDeceleration`, `maxYieldAcceleration`, `maxYieldSpeedLoss` | 3 m/s², 1 m/s², 5 m/s | Grenzen des Nachgebens |
 | `usePerception` | true | Fahrzeuge ohne MCM über Sensoren |
 | `dropProbability` | 0 | zusätzlicher Empfangsverlust |
@@ -199,6 +211,7 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 - **Realistische Spurwechsel:** 3–6 s, quintisch, 8 s Horizont, laufende Konfliktprüfung bis zur Spurgrenze, jederzeit abbrechbar.
 - **Keine Kategorie „noncoop“ mehr:** Entweder kooperierender Teilnehmer oder ganz ohne V2X. Der frühere Anteil von noncoop ist in `mcm-twolane` an coop gegangen.
 - **Hysterese beim Yielder:** Implizite Zusagen kommen jetzt an (siehe Abschnitt 7).
+- **Hysterese auch beim Requester:** Nach der Lückenwahl starteten viele Spurwechsel ohne Verhandlung und brachen dann mit `failed_conflict` ab, z. B. 2652 viermal wegen 2728. Der Grund war der erste, gerade so konfliktfreie Kandidat, während das Fahrzeug in der Zielspur leicht beschleunigte. Seitdem entscheidet der Requester mit voller Marge, nimmt Zusagen mit halber Marge an und bricht nur bei echten Konflikten ab. Die Parameter `yieldMargin*` heißen jetzt `decisionMargin*`. Noch nicht in der VM getestet.
 - **Lückenwahl beim Requester und leichtes Beschleunigen beim Yielder:** Das löst Fälle, in denen der Partner vor dem Requester fährt und Bremsen nicht hilft. Im ersten Lauf führten deutlich mehr Zusagen zu einem Spurwechsel (rund 19 `partner_done` gegenüber 14 `partner_released`), und es gab Spurwechsel ohne Verhandlung dank Geschwindigkeitsänderung.
 - **Korrekturen nach dem ersten Lauf der Lückenwahl:**
   - Die Geschwindigkeitsgrenze war `getAllowedSpeed`. Weil das den Geschwindigkeitsfaktor enthält, ist es die Wunschgeschwindigkeit, und ein Yielder konnte praktisch nie beschleunigen. Jetzt gilt das Tempolimit der Spur.
@@ -206,6 +219,7 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 
 ## 16. Bekannte Grenzen und offene Punkte
 
+- **Zugesagte Manöver anderer werden nicht respektiert:** Ein MCM-Fahrzeug reagiert nur auf angefragte Trajektorien. Ein schon zugesagter Spurwechsel in seine Spur (Referenztrajektorie eines Nachbarn) hält es nicht davon ab, in die Lücke zu beschleunigen, denn es wird von SUMO gefahren. Nach TR 103 578 sollten zugesagte Manöver respektiert werden. Idee: die eigene Geschwindigkeit so begrenzen, dass kein Konflikt mit den Referenztrajektorien anderer entsteht.
 - **Alles oder nichts:** Gibt ein Partner nach, während ein anderer ablehnt, bremst der erste umsonst. Der Requester bekommt trotzdem den Timeout.
 - **Fahrzeuge ohne MCM:** Blockiert nur so ein Fahrzeug, wird trotzdem alle ~3 s neu angefragt. Ideen: keine Anfrage senden, sondern warten bzw. die Geschwindigkeit anpassen, mit eigenem Ergebnis `blocked_unknown`.
 - **Keine Dringlichkeit beim Einfädeln:** Für Merges gelten dieselben Grenzen beim Nachgeben und derselbe Takt der Versuche wie bei freiwilligen Spurwechseln. Idee: die Grenzen nach der Restlänge der Einfädelspur skalieren und den Takt verkürzen.

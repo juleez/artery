@@ -35,8 +35,9 @@ class VehicleDataProvider;
  *   (yield). In the base concept the adapted reference trajectory is the only answer
  *   and the requester checks for itself whether its request has become conflict free;
  *   with explicitResponses the extension of the TR adds ACK/NACK per requested trajectory.
- *   A yielder judges requests with a margin on gap and headway (yieldMargin*), so that
- *   its adapted plan also passes the requester's check (hysteresis)
+ *   Hysteresis: decisions use a margin on gap and headway (decisionMargin*): a yielder judges
+ *   requests and its adaptation with it, a lane change is driven without negotiation only if it
+ *   is free with it; an implicit grant needs half the margin, an abort a conflict by the plain rules
  * - gap selection: before a lane change is announced, the requester tries speed changes
  *   and longer lead times; the first plan free of conflicts is driven without negotiation,
  *   otherwise the plan with the fewest conflicts becomes the requested trajectory
@@ -169,9 +170,13 @@ private:
     // conflicts
     std::vector<double> checkTimes(const omnetpp::SimTime& now, double until) const;
     mcm::Body neighbourBody(const Neighbour&, const mcm::McPoints&, const mcm::Geo& origin, double t) const;
-    /** vehicles whose reference trajectory conflicts with the plan but not with the keep lane plan */
+    /**
+     * vehicles whose reference trajectory conflicts with the plan but not with the keep lane plan;
+     * the plan is judged with rules (default: the plain conflict rules), the keep plan always with the plain ones
+     */
     std::set<uint32_t> conflictsOf(const McPlan& plan, const McPlan& keep, const omnetpp::SimTime& now,
-            const omnetpp::SimTime& requestTime, bool& blockedByUnknown) const;
+            const omnetpp::SimTime& requestTime, bool& blockedByUnknown,
+            const mcm::ConflictRules* rules = nullptr) const;
     /** true if a requested trajectory of another vehicle conflicts with the own plan */
     /** the requested trajectory of n conflicts with own, judged with the stricter rules of the yielder */
     bool affectedBy(const Neighbour&, const McPlan& own, const omnetpp::SimTime& now) const;
@@ -266,7 +271,8 @@ private:
     double mCheckStep;
     double mRequestRange;
     mcm::ConflictRules mConflictRules;
-    mcm::ConflictRules mYieldRules;     //< mConflictRules plus the yield margin
+    mcm::ConflictRules mDecisionRules;  //< mConflictRules plus the decision margin
+    mcm::ConflictRules mGrantRules;     //< mConflictRules plus half the decision margin
     double mMaxYieldDeceleration;
     double mMaxYieldAcceleration;
     double mMaxYieldSpeedLoss;

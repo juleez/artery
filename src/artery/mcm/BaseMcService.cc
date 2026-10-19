@@ -120,9 +120,14 @@ void BaseMcService::initialize()
     mConflictRules.minGap = par("conflictMinGap");
     mConflictRules.headway = par("conflictHeadway");
     mConflictRules.lateralMargin = par("conflictLateralMargin");
-    mYieldRules = mConflictRules;
-    mYieldRules.minGap += par("yieldMarginGap").doubleValue();
-    mYieldRules.headway += par("yieldMarginHeadway").doubleValue();
+    const double marginGap = par("decisionMarginGap").doubleValue();
+    const double marginHeadway = par("decisionMarginHeadway").doubleValue();
+    mDecisionRules = mConflictRules;
+    mDecisionRules.minGap += marginGap;
+    mDecisionRules.headway += marginHeadway;
+    mGrantRules = mConflictRules;
+    mGrantRules.minGap += 0.5 * marginGap;
+    mGrantRules.headway += 0.5 * marginHeadway;
     mMaxYieldDeceleration = par("maxYieldDeceleration");
     mMaxYieldAcceleration = par("maxYieldAcceleration");
     mMaxYieldSpeedLoss = par("maxYieldSpeedLoss");
@@ -395,12 +400,14 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
         if (c.accel > 0.0) {
             // accelerating must not run into vehicles ahead in the own lane
             bool aheadUnknown = false;
-            if (!conflictsOf(keepAdapted, keep, now, now, aheadUnknown).empty() || aheadUnknown) {
+            if (!conflictsOf(keepAdapted, keep, now, now, aheadUnknown, &mDecisionRules).empty() || aheadUnknown) {
                 continue;
             }
         }
+        // judged with the decision margin: a plan free only by the plain rules would be aborted by the
+        // smallest deviation of others (hysteresis, as for the yielder); such a plan is requested instead
         bool blockedByUnknown = false;
-        m.affected = conflictsOf(m.plan, keepAdapted, now, now, blockedByUnknown);
+        m.affected = conflictsOf(m.plan, keepAdapted, now, now, blockedByUnknown, &mDecisionRules);
         m.affectedUnknown = blockedByUnknown;
         m.lastConflicts = m.affected;
         m.lastUnknown = blockedByUnknown;
@@ -450,8 +457,9 @@ void BaseMcService::updateRequest(const SimTime& now)
         return;
     }
 
+    // implicit grant with half the decision margin: the yielders adapt with the full margin
     bool blockedByUnknown = false;
-    const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown);
+    const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown, &mGrantRules);
     mManeuver.lastConflicts = conflicts;
     mManeuver.lastUnknown = blockedByUnknown;
     bool granted = conflicts.empty() && !blockedByUnknown;
@@ -502,7 +510,8 @@ void BaseMcService::updateCommitted(const SimTime& now)
         return;
     }
 
-    // last check before the lateral movement, as with the on-board sensors in TR 103 578 clause 5.2.3
+    // last check before the lateral movement, as with the on-board sensors in TR 103 578 clause 5.2.3;
+    // plain rules: the margin was applied when the lane change was decided
     bool blockedByUnknown = false;
     const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown);
     mManeuver.lastConflicts = conflicts;
@@ -748,7 +757,7 @@ bool BaseMcService::freeAhead(const Neighbour& requester, const McPlan& trial, c
 {
     // accelerating must not create conflicts with other vehicles, e.g. the own leader
     bool blockedByUnknown = false;
-    auto conflicts = conflictsOf(trial, keepLanePlan(now), now, now, blockedByUnknown);
+    auto conflicts = conflictsOf(trial, keepLanePlan(now), now, now, blockedByUnknown, &mDecisionRules);
     conflicts.erase(requester.msg->getStationId());
     return conflicts.empty() && !blockedByUnknown;
 }
@@ -864,8 +873,9 @@ Body BaseMcService::neighbourBody(const Neighbour& n, const McPoints& points, co
 }
 
 std::set<uint32_t> BaseMcService::conflictsOf(const McPlan& plan, const McPlan& keep, const SimTime& now,
-        const SimTime& requestTime, bool& blockedByUnknown) const
+        const SimTime& requestTime, bool& blockedByUnknown, const mcm::ConflictRules* rules) const
 {
+    const mcm::ConflictRules& planRules = rules ? *rules : mConflictRules;
     std::set<uint32_t> result;
     blockedByUnknown = false;
 
@@ -877,7 +887,7 @@ std::set<uint32_t> BaseMcService::conflictsOf(const McPlan& plan, const McPlan& 
     auto causedBy = [&](const std::function<Body(double)>& other) {
         for (std::size_t i = 0; i < times.size(); ++i) {
             const Body b = other(times[i]);
-            if (mcm::conflicts(moving[i], b, mConflictRules) && !mcm::conflicts(keeping[i], b, mConflictRules)) {
+            if (mcm::conflicts(moving[i], b, planRules) && !mcm::conflicts(keeping[i], b, mConflictRules)) {
                 return true;
             }
         }
@@ -964,7 +974,7 @@ bool BaseMcService::affectedBy(const Neighbour& n, const McPlan& own, const SimT
         // know the other only from its last MCM (age, 250 ms points), and the smallest sufficient
         // adaptation would otherwise leave the requester's own check at the edge (hysteresis);
         // conflicts of ordinary car following are excluded with the rules of the requester
-        if (mcm::conflicts(moving, mine[i], mYieldRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
+        if (mcm::conflicts(moving, mine[i], mDecisionRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
             return true;
         }
     }
