@@ -887,7 +887,9 @@ std::set<uint32_t> BaseMcService::conflictsOf(const McPlan& plan, const McPlan& 
     auto causedBy = [&](const std::function<Body(double)>& other) {
         for (std::size_t i = 0; i < times.size(); ++i) {
             const Body b = other(times[i]);
-            if (mcm::conflicts(moving[i], b, planRules) && !mcm::conflicts(keeping[i], b, mConflictRules)) {
+            // both with the same rules: with the margin only for the plan, a vehicle merely close
+            // ahead in the own lane would count as a conflict of the lane change
+            if (mcm::conflicts(moving[i], b, planRules) && !mcm::conflicts(keeping[i], b, planRules)) {
                 return true;
             }
         }
@@ -973,8 +975,8 @@ bool BaseMcService::affectedBy(const Neighbour& n, const McPlan& own, const SimT
         // the yielder judges the request with a margin on top of the rules of the requester: both
         // know the other only from its last MCM (age, 250 ms points), and the smallest sufficient
         // adaptation would otherwise leave the requester's own check at the edge (hysteresis);
-        // conflicts of ordinary car following are excluded with the rules of the requester
-        if (mcm::conflicts(moving, mine[i], mDecisionRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
+        // conflicts of ordinary car following are excluded with the same rules
+        if (mcm::conflicts(moving, mine[i], mDecisionRules) && !mcm::conflicts(keeping, mine[i], mDecisionRules)) {
             return true;
         }
     }

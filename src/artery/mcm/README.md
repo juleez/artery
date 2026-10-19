@@ -122,7 +122,7 @@ Jede Seite kennt die andere nur aus deren letzter MCM. Würden alle Prüfungen m
 | Zusage | normal + halbe Marge (`mGrantRules`) | Requester: implizite Zusage während der Anfrage |
 | Überwachung | normal (`mConflictRules`) | letzte Prüfung vor dem Start, laufende Prüfung bis zur Spurgrenze |
 
-Der Vergleichsplan „Spur halten“ wird immer mit den normalen Regeln geprüft.
+Der Vergleichsplan „Spur halten“ wird mit **denselben** Regeln geprüft wie der Manöverplan. Ein erster Versuch prüfte ihn immer mit den normalen Regeln. Dadurch galt ein Vorderfahrzeug in der eigenen Spur, das nur innerhalb der Marge lag, als Konflikt des Spurwechsels, und fast jeder Spurwechsel landete in einer aussichtslosen Verhandlung. Beispiel: 94 fragte rund 25-mal bei 544 an, das 37 m vor ihm in derselben Spur fuhr.
 
 ## 9. Legitime Abweichungen (`McService`, Kap. 5.3)
 
@@ -211,7 +211,7 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 - **Realistische Spurwechsel:** 3–6 s, quintisch, 8 s Horizont, laufende Konfliktprüfung bis zur Spurgrenze, jederzeit abbrechbar.
 - **Keine Kategorie „noncoop“ mehr:** Entweder kooperierender Teilnehmer oder ganz ohne V2X. Der frühere Anteil von noncoop ist in `mcm-twolane` an coop gegangen.
 - **Hysterese beim Yielder:** Implizite Zusagen kommen jetzt an (siehe Abschnitt 7).
-- **Hysterese auch beim Requester:** Nach der Lückenwahl starteten viele Spurwechsel ohne Verhandlung und brachen dann mit `failed_conflict` ab, z. B. 2652 viermal wegen 2728. Der Grund war der erste, gerade so konfliktfreie Kandidat, während das Fahrzeug in der Zielspur leicht beschleunigte. Seitdem entscheidet der Requester mit voller Marge, nimmt Zusagen mit halber Marge an und bricht nur bei echten Konflikten ab. Die Parameter `yieldMargin*` heißen jetzt `decisionMargin*`. Noch nicht in der VM getestet.
+- **Hysterese auch beim Requester:** Nach der Lückenwahl starteten viele Spurwechsel ohne Verhandlung und brachen dann mit `failed_conflict` ab, z. B. 2652 viermal wegen 2728. Der Grund war der erste, gerade so konfliktfreie Kandidat, während das Fahrzeug in der Zielspur leicht beschleunigte. Seitdem entscheidet der Requester mit voller Marge, nimmt Zusagen mit halber Marge an und bricht nur bei echten Konflikten ab. Die Parameter `yieldMargin*` heißen jetzt `decisionMargin*`. Im ersten Lauf gab es tatsächlich kaum noch `failed_conflict`, aber wegen eines Fehlers im Vergleichsplan (siehe Abschnitt 8) fast nur noch Timeouts; das ist korrigiert, aber noch nicht in der VM getestet.
 - **Lückenwahl beim Requester und leichtes Beschleunigen beim Yielder:** Das löst Fälle, in denen der Partner vor dem Requester fährt und Bremsen nicht hilft. Im ersten Lauf führten deutlich mehr Zusagen zu einem Spurwechsel (rund 19 `partner_done` gegenüber 14 `partner_released`), und es gab Spurwechsel ohne Verhandlung dank Geschwindigkeitsänderung.
 - **Korrekturen nach dem ersten Lauf der Lückenwahl:**
   - Die Geschwindigkeitsgrenze war `getAllowedSpeed`. Weil das den Geschwindigkeitsfaktor enthält, ist es die Wunschgeschwindigkeit, und ein Yielder konnte praktisch nie beschleunigen. Jetzt gilt das Tempolimit der Spur.

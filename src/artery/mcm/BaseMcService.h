@@ -172,7 +172,7 @@ private:
     mcm::Body neighbourBody(const Neighbour&, const mcm::McPoints&, const mcm::Geo& origin, double t) const;
     /**
      * vehicles whose reference trajectory conflicts with the plan but not with the keep lane plan;
-     * the plan is judged with rules (default: the plain conflict rules), the keep plan always with the plain ones
+     * both are judged with rules (default: the plain conflict rules)
      */
     std::set<uint32_t> conflictsOf(const McPlan& plan, const McPlan& keep, const omnetpp::SimTime& now,
             const omnetpp::SimTime& requestTime, bool& blockedByUnknown,
