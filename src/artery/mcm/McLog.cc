@@ -24,11 +24,14 @@ void McLog::open(const std::string& prefix)
     // unknown_start: a vehicle without MCM (own sensors) was in conflict when the request was sent;
     // conflicts_end, unknown_end: result of the last conflict check of the requester
     // (at the timeout, the last check before or during the lateral movement);
-    // speed_change: requester: target minus initial speed of the gap selection, yielder: of the adaptation
+    // speed_change: requester: target minus initial speed of the gap selection, yielder: of the adaptation;
+    // conflict_detail: vehicles of conflicts_end as id:gap:speed:reference_changed:reference_type separated by ';'
+    // (gap front to front along the own heading, positive ahead; reference_changed 1 if the vehicle announced
+    // a new plan after the own commit, -1 unknown)
     openFile(mManeuvers, "maneuvers",
         "station_id,vehicle_id,maneuver_id,role,type,partners,"
         "t_announce,t_commit,t_lateral_start,t_end,outcome,negotiated,acks,nacks,lane_change_duration,abort_after,"
-        "unknown_start,conflicts_end,unknown_end,speed_change");
+        "unknown_start,conflicts_end,unknown_end,speed_change,conflict_detail");
     // decision of the partner: accepted, busy or cost; state of the partner before the decision;
     // gap_longitudinal along the partner's heading (positive: requester ahead), offset_lateral positive to the left;
     // requester_speed from its basic container, requested_end_speed at the end of the requested trajectory;

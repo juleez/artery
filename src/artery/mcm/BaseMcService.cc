@@ -11,6 +11,7 @@
 #include <vanetza/geonet/interface.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <sstream>
@@ -111,6 +112,11 @@ void BaseMcService::initialize()
     mMaxRequesterSpeedChange = par("maxRequesterSpeedChange");
     mRequesterSpeedStep = par("requesterSpeedStep");
     mMaxExtraLeadTime = par("maxExtraLeadTime");
+    mBlockedRetryInterval = par("blockedRetryInterval");
+    mMergeUrgencyDistance = par("mergeUrgencyDistance");
+    mMaxMergeSpeedReduction = par("maxMergeSpeedReduction");
+    mMaxMergeDeceleration = par("maxMergeDeceleration");
+    mMinMergeCooldown = par("minMergeCooldown");
     mWishReasons = par("wishReasons");
     mExplicitResponses = par("explicitResponses");
     mResponseLifetime = par("responseLifetime");
@@ -320,14 +326,28 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
         double accel = 0.0;
         double cost = 0.0;
     };
+    // a merge has to cross the lane boundary before the acceleration lane ends; the closer the end,
+    // the stronger the speed reduction it may use to fall in behind a gap
+    const double remaining = type == MC_MERGE ? mPlanner->remainingLength(lane) : -1.0;
+    const double urgency = remaining < 0.0 || mMergeUrgencyDistance <= 0.0 ? 0.0 :
+        std::min(1.0, std::max(0.0, 1.0 - remaining / mMergeUrgencyDistance));
+    const double maxReduction = mMaxRequesterSpeedChange +
+        urgency * std::max(0.0, mMaxMergeSpeedReduction - mMaxRequesterSpeedChange);
+    const double deceleration = mRequesterDeceleration +
+        urgency * std::max(0.0, mMaxMergeDeceleration - mRequesterDeceleration);
+
     std::vector<Candidate> candidates;
-    const int steps = mRequesterSpeedStep > 0.0 ? static_cast<int>(std::floor(mMaxRequesterSpeedChange / mRequesterSpeedStep + 1e-6)) : 0;
+    auto stepsFor = [this](double change) {
+        return mRequesterSpeedStep > 0.0 ? static_cast<int>(std::floor(change / mRequesterSpeedStep + 1e-6)) : 0;
+    };
+    const int stepsUp = stepsFor(mMaxRequesterSpeedChange);
+    const int stepsDown = stepsFor(maxReduction);
     for (double extra = 0.0; extra <= mMaxExtraLeadTime + 1e-6; extra += 1.0) {
         const double lead = mLeadTime.dbl() + extra;
         if (extra > 0.0 && lead + drawn > horizon) {
             break; // a longer lead time must not shorten the drawn lane change
         }
-        for (int k = -steps; k <= steps; ++k) {
+        for (int k = -stepsDown; k <= stepsUp; ++k) {
             Candidate c;
             c.lead = lead;
             c.targetSpeed = speed;
@@ -339,7 +359,7 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
                 }
             } else if (k < 0) {
                 c.targetSpeed = std::max(0.0, speed + k * mRequesterSpeedStep);
-                c.accel = -mRequesterDeceleration;
+                c.accel = -deceleration;
                 if (-c.accel <= 0.0 || speed - c.targetSpeed < -0.5 * k * mRequesterSpeedStep) {
                     continue;
                 }
@@ -357,8 +377,6 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
     const double pathLength = std::max(fastest, 10.0) * (mLeadTime.dbl() + mMaxExtraLeadTime + drawn + horizon) + 50.0;
     const McPlan base = mPlanner->planLane(lane, now.dbl(), pathLength);
     const McPlan keep = keepLanePlan(now);
-    // a merge has to cross the lane boundary before the acceleration lane ends
-    const double remaining = type == MC_MERGE ? mPlanner->remainingLength(lane) : -1.0;
 
     Maneuver best;
     bool found = false;
@@ -411,6 +429,7 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
         m.affectedUnknown = blockedByUnknown;
         m.lastConflicts = m.affected;
         m.lastUnknown = blockedByUnknown;
+        m.urgency = urgency;
         if (m.affected.empty() && !blockedByUnknown) {
             best = std::move(m);
             found = true;
@@ -431,6 +450,14 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
     best.id = nextTrajectoryId();
     best.announced = now;
     mManeuver = std::move(best);
+    mManeuver.conflictDetail = describeConflicts(mManeuver.lastConflicts, now);
+
+    if (!found && mManeuver.affectedUnknown) {
+        // a vehicle without MCM blocks every candidate: no MCM vehicle could resolve that, a request
+        // would only make others brake in vain; nothing has been announced, a new attempt follows soon
+        finishManeuver("blocked_unknown", now);
+        return;
+    }
 
     // the vehicle drives the announced speed until the lane change is completed (thesis Section 5.2)
     if (mManeuver.speedAccel == 0.0) {
@@ -462,6 +489,7 @@ void BaseMcService::updateRequest(const SimTime& now)
     const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown, &mGrantRules);
     mManeuver.lastConflicts = conflicts;
     mManeuver.lastUnknown = blockedByUnknown;
+    mManeuver.conflictDetail = describeConflicts(conflicts, now);
     bool granted = conflicts.empty() && !blockedByUnknown;
     if (granted && mExplicitResponses) {
         // every vehicle in conflict with the request has to agree, unless it has left the neighbourhood
@@ -485,6 +513,9 @@ void BaseMcService::commit(const SimTime& now)
 {
     mManeuver.committed = now;
     mState = State::Committed;
+    for (const auto& entry : mNeighbours) {
+        mManeuver.referencesAtCommit[entry.first] = entry.second.msg->getReferenceId();
+    }
     // the requested trajectory becomes the reference trajectory, keeping its id
     setReference(mManeuver.plan, mManeuver.type, now, mManeuver.id);
 }
@@ -516,6 +547,7 @@ void BaseMcService::updateCommitted(const SimTime& now)
     const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown);
     mManeuver.lastConflicts = conflicts;
     mManeuver.lastUnknown = blockedByUnknown;
+    mManeuver.conflictDetail = describeConflicts(conflicts, now);
     if (!conflicts.empty() || blockedByUnknown) {
         finishManeuver("failed_gap", now);
         return;
@@ -546,6 +578,7 @@ void BaseMcService::updateExecution(const SimTime& now)
         if (!conflicts.empty() || blockedByUnknown) {
             mManeuver.lastConflicts = conflicts;
             mManeuver.lastUnknown = blockedByUnknown;
+            mManeuver.conflictDetail = describeConflicts(conflicts, now);
             beginReturn("failed_conflict", true, now);
         }
     }
@@ -618,14 +651,25 @@ void BaseMcService::finishManeuver(const char* outcome, const SimTime& now)
             << mManeuver.negotiated << "," << joinIds(mManeuver.acks) << "," << joinIds(mManeuver.nacks) << ","
             << mManeuver.laneChangeDuration << "," << mManeuver.execution.abortAfter << ","
             << mManeuver.affectedUnknown << "," << joinIds(mManeuver.lastConflicts) << "," << mManeuver.lastUnknown << ","
-            << mManeuver.targetSpeed - mManeuver.startSpeed << std::endl;
+            << mManeuver.targetSpeed - mManeuver.startSpeed << "," << mManeuver.conflictDetail << std::endl;
     }
+
+    // merges retry more quickly towards the end of the ending lane, a blocked attempt was never announced
+    SimTime cooldown = mManeuverCooldown;
+    if (mManeuver.type == MC_MERGE) {
+        cooldown = mManeuverCooldown * (1.0 - mManeuver.urgency) + mMinMergeCooldown * mManeuver.urgency;
+    }
+    const bool blocked = std::strcmp(outcome, "blocked_unknown") == 0;
+    if (blocked) {
+        cooldown = std::min(cooldown, mBlockedRetryInterval);
+    }
+    const bool announced = mState != State::Idle;
 
     mManeuver = Maneuver();
     mState = State::Idle;
-    mNextManeuverAllowed = now + mManeuverCooldown;
+    mNextManeuverAllowed = now + cooldown;
     mWishDirection = 0;
-    if (!mVehicleGone) {
+    if (!mVehicleGone && announced) {
         releaseSpeed();
         setReference(keepLanePlan(now), MC_KEEP_LANE, now);
     }
@@ -795,7 +839,7 @@ void BaseMcService::releaseYield(const char* outcome, const SimTime& now)
         log.maneuvers() << stationId() << "," << vehicleId() << "," << mReferenceId << ",yielder,"
             << static_cast<int>(MC_YIELD) << "," << mYield.requester << ","
             << mYield.since.dbl() << "," << mYield.since.dbl() << ",-1," << now.dbl() << "," << outcome << ","
-            << false << ",," << "," << "0,-1,0,,0," << mYield.targetSpeed - mYield.startSpeed << std::endl;
+            << false << ",," << "," << "0,-1,0,,0," << mYield.targetSpeed - mYield.startSpeed << "," << std::endl;
     }
 
     mYield = Yield();
@@ -1214,6 +1258,32 @@ McLongitudinalProfile BaseMcService::maneuverLongitudinal(double speed) const
         lon.maxSpeed = lon.accel > 0.0 ? mManeuver.targetSpeed : 1e9;
     }
     return lon;
+}
+
+std::string BaseMcService::describeConflicts(const std::set<uint32_t>& ids, const SimTime& now) const
+{
+    // gap: front to front along the own heading at now, positive ahead; reference_changed: the other
+    // vehicle has announced a new plan since the own lane change was committed (-1: not committed yet
+    // or the vehicle was not known then)
+    std::ostringstream out;
+    const Geo origin = mPlanner->vehicleGeo();
+    const Enu forward = mcm::headingVector(headingDegrees(*mVehicleDataProvider));
+    bool first = true;
+    for (uint32_t id : ids) {
+        auto found = mNeighbours.find(id);
+        if (found == mNeighbours.end()) {
+            continue;
+        }
+        const Neighbour& n = found->second;
+        const Body body = neighbourBody(n, mcm::referencePoints(*n.msg), origin, now.dbl());
+        auto snapshot = mManeuver.referencesAtCommit.find(id);
+        const int changed = snapshot == mManeuver.referencesAtCommit.end() ? -1 :
+            (snapshot->second != n.msg->getReferenceId() ? 1 : 0);
+        out << (first ? "" : ";") << id << ":" << mcm::dot(body.front, forward) << ":" << body.speed << ":"
+            << changed << ":" << static_cast<int>(n.msg->getReferenceType());
+        first = false;
+    }
+    return out.str();
 }
 
 McPlan BaseMcService::maneuverKeepPlan(const SimTime& now) const

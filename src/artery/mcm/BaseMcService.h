@@ -41,6 +41,10 @@ class VehicleDataProvider;
  * - gap selection: before a lane change is announced, the requester tries speed changes
  *   and longer lead times; the first plan free of conflicts is driven without negotiation,
  *   otherwise the plan with the fewest conflicts becomes the requested trajectory
+ * - no request is sent if a vehicle without MCM blocks every candidate: no MCM vehicle could
+ *   resolve it (outcome blocked_unknown, new attempt after blockedRetryInterval)
+ * - merges become more urgent towards the end of the ending lane: stronger speed reductions
+ *   are tried and attempts follow each other more quickly
  * - the request is withdrawn when it has not been granted within requestTimeout
  *
  * Lane changes are not decided by SUMO itself: autonomous lane changes are switched
@@ -86,6 +90,9 @@ protected:
         double startSpeed = 0.0;            //< m/s when the manoeuvre was announced
         double targetSpeed = 0.0;           //< m/s
         double speedAccel = 0.0;            //< m/s^2, negative for deceleration
+        double urgency = 0.0;               //< merges: 0 far from, 1 at the end of the ending lane
+        std::map<uint32_t, uint16_t> referencesAtCommit;    //< reference ids of the neighbours when committed
+        std::string conflictDetail;         //< state of the vehicles of lastConflicts, for the log
         McPlan plan;                        //< lane change plan along the origin lane
         omnetpp::SimTime announced;         //< first MCM with this manoeuvre
         omnetpp::SimTime committed;         //< request granted or no negotiation needed
@@ -196,6 +203,8 @@ private:
     McLongitudinalProfile maneuverLongitudinal(double speed) const;
     /** lane keeping with the remaining speed change of the own manoeuvre: alternative of the lane change */
     McPlan maneuverKeepPlan(const omnetpp::SimTime& now) const;
+    /** id:gap:speed:reference_changed:reference_type of each vehicle in conflict, for the log */
+    std::string describeConflicts(const std::set<uint32_t>&, const omnetpp::SimTime& now) const;
     /** highest speed a manoeuvre may accelerate to: lane speed limit, at least the own desired speed */
     double accelerationLimit() const;
     void controlLongitudinal(const omnetpp::SimTime& now);
@@ -264,6 +273,11 @@ private:
     double mMaxRequesterSpeedChange;
     double mRequesterSpeedStep;
     double mMaxExtraLeadTime;
+    omnetpp::SimTime mBlockedRetryInterval;
+    double mMergeUrgencyDistance;
+    double mMaxMergeSpeedReduction;
+    double mMaxMergeDeceleration;
+    omnetpp::SimTime mMinMergeCooldown;
     int mWishReasons;
     bool mExplicitResponses;
     omnetpp::SimTime mResponseLifetime;

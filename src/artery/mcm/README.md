@@ -82,6 +82,9 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
    Die Kandidaten werden nach Aufwand sortiert: ein Geschwindigkeitsschritt zählt wie 1 s zusätzlicher Vorlauf, bei Gleichstand kommt Bremsen vor Beschleunigen. Bei einem Merge muss die Spurgrenze vor dem Ende der Einfädelspur überquert werden, sonst fällt der Kandidat weg (außer der Grundplan ohne Änderung).
    - Der erste Kandidat, der **mit Entscheidungsmarge** konfliktfrei ist (siehe Abschnitt 8), wird ohne Verhandlung sofort zur Referenztrajektorie (`Committed`). Ein Kandidat, der nur mit den normalen Regeln konfliktfrei ist, wird angefragt, weil ihn die kleinste Abweichung anderer sonst während der Querbewegung abbrechen lässt.
    - Gibt es keinen, wird der Kandidat **angefragt**, der am wenigsten Kooperation braucht: zuerst ohne Blockade durch ein Fahrzeug ohne MCM, dann mit möglichst wenigen betroffenen MCM-Fahrzeugen.
+   - Blockiert bei **jedem** Kandidaten ein Fahrzeug ohne MCM, wird **nicht** angefragt. Kein MCM-Fahrzeug könnte das auflösen, eine Anfrage würde andere nur umsonst bremsen lassen. Das Ergebnis ist `blocked_unknown`. Weil nichts angekündigt wurde, gibt es auch keine neue Referenztrajektorie, und nach `blockedRetryInterval` (1 s) folgt ein neuer Versuch.
+
+   **Dringlichkeit beim Einfädeln:** Auf den letzten `mergeUrgencyDistance` (200 m) der Einfädelspur wächst die Dringlichkeit von 0 auf 1. Mit ihr steigt die erlaubte Geschwindigkeitsreduktion bis `maxMergeSpeedReduction` (12 m/s) und die Verzögerung bis `maxMergeDeceleration` (3 m/s²). So kann sich das Fahrzeug auch hinter einem Lkw oder einem Fahrzeug ohne MCM einordnen. Die Pause nach einem gescheiterten Versuch schrumpft bis `minMergeCooldown` (0,5 s).
 3. **Längsführung.** Eine gewählte Geschwindigkeitsänderung fährt das Fahrzeug ab der Ankündigung, also schon während der Anfrage. Die Regelung schließt in jedem Schritt die Schleife: `setSpeed` auf die Geschwindigkeit des nächsten Schritts. Die Referenztrajektorie während der Anfrage ist „Spur halten mit dieser Geschwindigkeitsänderung“. Ohne Änderung wird die Geschwindigkeit konstant gehalten (Kap. 5.2). Nach dem Manöver übernimmt SUMO wieder.
 4. **Anfrage** (`Requesting`). In jedem Schritt prüft der Requester seinen Plan gegen die empfangenen Referenztrajektorien und gegen wahrgenommene Fahrzeuge ohne MCM.
    - Konfliktfrei mit **halber** Entscheidungsmarge heißt implizit zugesagt, das Manöver geht nach `Committed`.
@@ -155,6 +158,8 @@ Angreifer leiten von `BaseMcService` oder `McService` ab. Der Detektor bekommt e
 | `requesterAcceleration`, `requesterDeceleration` | 1 bzw. 1,5 m/s² | Lückenwahl |
 | `maxRequesterSpeedChange`, `requesterSpeedStep` | 4 m/s, 2 m/s | Lückenwahl |
 | `maxExtraLeadTime` | 2 s | Lückenwahl, in Schritten von 1 s |
+| `blockedRetryInterval` | 1 s | neuer Versuch nach `blocked_unknown` |
+| `mergeUrgencyDistance`, `maxMergeSpeedReduction`, `maxMergeDeceleration`, `minMergeCooldown` | 200 m, 12 m/s, 3 m/s², 0,5 s | Dringlichkeit beim Einfädeln |
 | `explicitResponses` | false | ACK/NACK-Erweiterung |
 | `requestRange` | 200 m | Reichweite der Konfliktprüfung |
 | `conflictMinGap`, `conflictHeadway`, `conflictLateralMargin` | 2,5 m, 1 s, 0,3 m | Konfliktregel |
@@ -172,12 +177,12 @@ Alle Dateien außer `mcm-tx.csv` werden zeilenweise geschrieben, man kann sie al
 | Datei | eine Zeile pro | wichtigste Spalten |
 |---|---|---|
 | `stations.csv` | Station | Station-ID, SUMO-ID, Service-Typ (Ground Truth für Angreifer) |
-| `maneuvers.csv` | Manöver (Requester) oder Nachgeben (Yielder) | `partners`, Zeitpunkte, `outcome`, ACKs/NACKs, Spurwechseldauer, Abbruchzeit, `unknown_start`, `conflicts_end`, `unknown_end`, `speed_change` |
+| `maneuvers.csv` | Manöver (Requester) oder Nachgeben (Yielder) | `partners`, Zeitpunkte, `outcome`, ACKs/NACKs, Spurwechseldauer, Abbruchzeit, `unknown_start`, `conflicts_end`, `unknown_end`, `speed_change`, `conflict_detail` (pro Fahrzeug in `conflicts_end`: `id:Lücke:Geschwindigkeit:Referenz_geändert:Referenztyp`; Lücke Front zu Front entlang des eigenen Kurses, positiv voraus; Referenz_geändert = 1, wenn das Fahrzeug nach dem eigenen Commit einen neuen Plan angekündigt hat, −1 unbekannt) |
 | `requests.csv` | Entscheidung eines betroffenen Partners | `decision` (`accepted`, `busy`, `cost`), Zustand, Abstand, Lücke längs/quer, beide Geschwindigkeiten, Yield-Ziel und Beschleunigung |
 | `mcm-tx.csv` | gesendete MCM | Zustand, IDs und Typen, Basiscontainer, Bytes, beide Trajektorien, Antworten |
 
 **Werte von `outcome`:**
-- Requester: `executed`, `timeout`, `declined`, `failed_gap`, `failed_conflict`, `failed_blocked`, `aborted_announced`, `aborted_silent`, `unfinished`
+- Requester: `executed`, `timeout`, `declined`, `blocked_unknown`, `failed_gap`, `failed_conflict`, `failed_blocked`, `aborted_announced`, `aborted_silent`, `unfinished`
 - Yielder: `partner_done`, `partner_released`, `partner_expired`, `unfinished`
 
 Skalare in den `.sca`-Dateien: `mcmSent`, `mcmSentWithRequest`, `mcmSentResponses`, `mcmReceived`, `mcmDropped`, `requestsAccepted`, `requestsDeclinedBusy`, `requestsDeclinedCost`.
@@ -213,6 +218,7 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 - **Hysterese beim Yielder:** Implizite Zusagen kommen jetzt an (siehe Abschnitt 7).
 - **Hysterese auch beim Requester:** Nach der Lückenwahl starteten viele Spurwechsel ohne Verhandlung und brachen dann mit `failed_conflict` ab, z. B. 2652 viermal wegen 2728. Der Grund war der erste, gerade so konfliktfreie Kandidat, während das Fahrzeug in der Zielspur leicht beschleunigte. Seitdem entscheidet der Requester mit voller Marge, nimmt Zusagen mit halber Marge an und bricht nur bei echten Konflikten ab. Die Parameter `yieldMargin*` heißen jetzt `decisionMargin*`. Im ersten Lauf gab es tatsächlich kaum noch `failed_conflict`, aber wegen eines Fehlers im Vergleichsplan (siehe Abschnitt 8) fast nur noch Timeouts; das ist korrigiert, aber noch nicht in der VM getestet.
 - **Lückenwahl beim Requester und leichtes Beschleunigen beim Yielder:** Das löst Fälle, in denen der Partner vor dem Requester fährt und Bremsen nicht hilft. Im ersten Lauf führten deutlich mehr Zusagen zu einem Spurwechsel (rund 19 `partner_done` gegenüber 14 `partner_released`), und es gab Spurwechsel ohne Verhandlung dank Geschwindigkeitsänderung.
+- **Fahrzeuge ohne MCM und Einfädeln:** Ein Lauf bis 191 s zeigte Ketten von 20–40 vergeblichen Anfragen gegen Fahrzeuge ohne MCM. Dabei bremsten Yielder wiederholt umsonst (2728 siebenmal für 2652), und ein Fahrzeug auf der Einfädelspur stand fast eine Minute. Seitdem gibt es keine Anfrage bei Blockade durch ein Fahrzeug ohne MCM (`blocked_unknown`), dazu die Dringlichkeit beim Einfädeln und die Spalte `conflict_detail`. Noch nicht in der VM getestet.
 - **Korrekturen nach dem ersten Lauf der Lückenwahl:**
   - Die Geschwindigkeitsgrenze war `getAllowedSpeed`. Weil das den Geschwindigkeitsfaktor enthält, ist es die Wunschgeschwindigkeit, und ein Yielder konnte praktisch nie beschleunigen. Jetzt gilt das Tempolimit der Spur.
   - Ein verzögernder Kandidat galt als Konflikt mit dem eigenen Folgefahrzeug. Jetzt wird mit „Spur halten mit derselben Geschwindigkeitsänderung“ verglichen, auch bei den Prüfungen während der Anfrage und vor dem Start.
@@ -221,8 +227,8 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 
 - **Zugesagte Manöver anderer werden nicht respektiert:** Ein MCM-Fahrzeug reagiert nur auf angefragte Trajektorien. Ein schon zugesagter Spurwechsel in seine Spur (Referenztrajektorie eines Nachbarn) hält es nicht davon ab, in die Lücke zu beschleunigen, denn es wird von SUMO gefahren. Nach TR 103 578 sollten zugesagte Manöver respektiert werden. Idee: die eigene Geschwindigkeit so begrenzen, dass kein Konflikt mit den Referenztrajektorien anderer entsteht.
 - **Alles oder nichts:** Gibt ein Partner nach, während ein anderer ablehnt, bremst der erste umsonst. Der Requester bekommt trotzdem den Timeout.
-- **Fahrzeuge ohne MCM:** Blockiert nur so ein Fahrzeug, wird trotzdem alle ~3 s neu angefragt. Ideen: keine Anfrage senden, sondern warten bzw. die Geschwindigkeit anpassen, mit eigenem Ergebnis `blocked_unknown`.
-- **Keine Dringlichkeit beim Einfädeln:** Für Merges gelten dieselben Grenzen beim Nachgeben und derselbe Takt der Versuche wie bei freiwilligen Spurwechseln. Idee: die Grenzen nach der Restlänge der Einfädelspur skalieren und den Takt verkürzen.
+- **Dringlichkeit nur beim Requester:** Ein Yielder hat bei einem Merge dieselben Grenzen wie bei einem freiwilligen Spurwechsel. Denkbar wäre, sie für `MERGE`-Anfragen anzuheben.
+- **Wiederkehrende Abbrüche gleicher Paare:** z. B. 1370/1522 und 2652/2804. Die Ursache ist noch offen; `conflict_detail` soll sie zeigen.
 - **`partner_done` ist zu optimistisch:** Der Yielder meldet es schon, wenn der Requester das Manöver zusagt, auch wenn der Spurwechsel danach mit `failed_gap` scheitert. Sauberer wäre ein eigenes `partner_failed`.
 - **Ein Partner pro Anfrage, eine Bewertung:** Eine einmal abgelehnte Anfrage (dieselbe ID) wird nicht neu bewertet. Der Requester fragt nach Timeout und Pause mit neuer ID an.
 - **Geschwindigkeitsverlust beim Yielder:** Er ist nur relativ zur Geschwindigkeit des Requesters begrenzt. Ein schneller Yielder kann deshalb stark abbremsen, z. B. von 150 auf 85 km/h für einen Lkw-Überholer. Eine zusätzliche Grenze relativ zur eigenen Geschwindigkeit wäre denkbar.

@@ -48,6 +48,15 @@ simple BaseMcService like ItsG5Service
         double maxRequesterSpeedChange @unit(mps) = default(4mps);
         double requesterSpeedStep @unit(mps) = default(2mps);
         double maxExtraLeadTime @unit(s) = default(2s);         // in steps of 1 s
+        // a vehicle without MCM blocks every candidate: no request (nobody could resolve it), new attempt after
+        double blockedRetryInterval @unit(s) = default(1s);
+        // merges: urgency grows from 0 to 1 over the last mergeUrgencyDistance of the ending lane; it raises the
+        // speed reduction of the gap selection up to maxMergeSpeedReduction with up to maxMergeDeceleration and
+        // shortens the cooldown after a failed attempt down to minMergeCooldown
+        double mergeUrgencyDistance @unit(m) = default(200m);
+        double maxMergeSpeedReduction @unit(mps) = default(12mps);
+        double maxMergeDeceleration @unit(mpss) = default(3mpss);
+        double minMergeCooldown @unit(s) = default(0.5s);
         double requestRepeatInterval @unit(s) = default(0.1s);
         double maneuverCooldown @unit(s) = default(2.0s);       // minimum time between two own manoeuvres
         double wishPersistence @unit(s) = default(0.5s);        // a lane change wish of SUMO has to last this long
