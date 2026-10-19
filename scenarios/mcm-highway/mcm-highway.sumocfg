@@ -11,10 +11,9 @@
     </time>
 
     <processing>
-        <!-- continuous lane changes: the vehicle moves laterally at constant speed
-             over this duration instead of jumping to the target lane in one step;
-             McService.laneChangeDuration has to match this value -->
-        <lanechange.duration value="3"/>
+        <!-- sublane model: McService drives the lateral movement of a lane change itself
+             (S-shaped profile, duration drawn per lane change, abort at any time) -->
+        <lateral-resolution value="0.875"/>
         <collision.action value="warn"/>
     </processing>
 

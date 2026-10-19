@@ -1,7 +1,6 @@
 #include "artery/mcm/BaseMcService.h"
 #include "artery/mcm/McGeometry.h"
 #include "artery/mcm/McLog.h"
-#include "artery/application/LocalDynamicMap.h"
 #include "artery/application/Timer.h"
 #include "artery/application/VehicleDataProvider.h"
 #include "artery/traci/VehicleController.h"
@@ -12,14 +11,23 @@
 #include <vanetza/geonet/interface.hpp>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <sstream>
+
+#ifdef WITH_ENVMOD
+#include "artery/envmod/LocalEnvironmentModel.h"
+#include "artery/envmod/TraCIEnvironmentModelObject.h"
+#endif
 
 namespace artery
 {
 
 using namespace omnetpp;
+using mcm::Body;
 using mcm::Enu;
 using mcm::Geo;
+using mcm::McPoints;
 
 Define_Module(BaseMcService)
 
@@ -33,8 +41,6 @@ const simsignal_t scSignalMcmReceived = cComponent::registerSignal("McmReceived"
 constexpr int LCA_LEFT = 1 << 1;
 constexpr int LCA_RIGHT = 1 << 2;
 constexpr int LCA_STRATEGIC = 1 << 3;
-constexpr int LCA_BLOCKED_BY_LEFT_LEADER = 1 << 9;
-constexpr int LCA_BLOCKED_BY_RIGHT_LEADER = 1 << 11;
 
 constexpr double pi = 3.14159265358979323846;
 
@@ -45,14 +51,33 @@ double headingDegrees(const VehicleDataProvider& vdp)
     return deg < 0.0 ? deg + 360.0 : deg;
 }
 
-double speedOf(const VehicleDataProvider& vdp)
-{
-    return vdp.speed().value();
-}
-
 Geo geoOf(const VehicleDataProvider& vdp)
 {
     return Geo { vdp.latitude().value(), vdp.longitude().value() };
+}
+
+const char* stateName(int state)
+{
+    static const char* names[] = { "idle", "requesting", "committed", "executing", "yielding" };
+    return state >= 0 && state < 5 ? names[state] : "?";
+}
+
+std::string joinIds(const std::set<uint32_t>& ids)
+{
+    std::ostringstream out;
+    for (auto it = ids.begin(); it != ids.end(); ++it) {
+        out << (it == ids.begin() ? "" : ";") << *it;
+    }
+    return out.str();
+}
+
+void writePoints(std::ostream& out, const McPoints& points)
+{
+    for (unsigned i = 0; i < points.size(); ++i) {
+        const McTrajectoryPoint& p = points[i];
+        out << (i ? ";" : "") << p.timeOffset << ":" << p.deltaEast << ":" << p.deltaNorth
+            << ":" << p.speed << ":" << p.heading;
+    }
 }
 
 } // namespace
@@ -63,32 +88,42 @@ void BaseMcService::initialize()
     mVehicleController = &getFacilities().get_mutable<traci::VehicleController>();
     mVehicleDataProvider = &getFacilities().get_const<VehicleDataProvider>();
     mTimer = &getFacilities().get_const<Timer>();
-    mLocalDynamicMap = &getFacilities().get_const<LocalDynamicMap>();
     mPlanner.reset(new McTrajectoryPlanner(*mVehicleController->getTraCI(), mVehicleController->getVehicleId()));
 
     mMinInterval = par("minInterval");
     mMaxInterval = par("maxInterval");
-    mHeadingDelta = par("headingDelta");
-    mPositionDelta = par("positionDelta");
-    mSpeedDelta = par("speedDelta");
+    mLongitudinalDeviation = par("longitudinalDeviation");
+    mLateralDeviation = par("lateralDeviation");
+    mSpeedDeviation = par("speedDeviation");
     mNumPoints = par("numPoints");
     mPointSpacing = par("pointSpacing");
     mLeadTime = par("leadTime");
     mRequestTimeout = par("requestTimeout");
     mRequestRepeatInterval = par("requestRepeatInterval");
-    mExecutionRepeatInterval = par("executionRepeatInterval");
     mManeuverCooldown = par("maneuverCooldown");
-    mStartTolerance = par("startTolerance");
-    mLaneChangeDuration = par("laneChangeDuration");
+    mWishPersistence = par("wishPersistence");
+    mLateralShape = McLateralProfile::parseShape(par("lateralShape").stdstringValue());
+    mLateralLookahead = par("lateralLookahead");
+    mLateralTolerance = par("lateralTolerance");
+    mBlockedTimeout = par("blockedTimeout");
     mWishReasons = par("wishReasons");
-    mPartnerSearchDistance = par("partnerSearchDistance");
-    mMaxAcceptDeceleration = par("maxAcceptDeceleration");
-    mAcceptMinGap = par("acceptMinGap");
-    mAcceptHeadway = par("acceptHeadway");
-    mAssumedVehicleLength = par("assumedVehicleLength");
+    mExplicitResponses = par("explicitResponses");
+    mResponseLifetime = par("responseLifetime");
+    mNeighbourTimeout = par("neighbourTimeout");
+    mCheckStep = par("checkStep");
+    mRequestRange = par("requestRange").doubleValue();
+    mConflictRules.minGap = par("conflictMinGap");
+    mConflictRules.headway = par("conflictHeadway");
+    mConflictRules.lateralMargin = par("conflictLateralMargin");
+    mMaxYieldDeceleration = par("maxYieldDeceleration");
+    mMaxYieldAcceleration = par("maxYieldAcceleration");
+    mMaxYieldSpeedLoss = par("maxYieldSpeedLoss");
+    mUsePerception = par("usePerception");
     mDropProbability = par("dropProbability");
     mHeaderBytes = par("headerBytes");
     mPointBytes = par("pointBytes");
+    mRequestHeaderBytes = par("requestHeaderBytes");
+    mResponseBytes = par("responseBytes");
     mTrafficClass = par("trafficClass");
     mLogTransmissions = par("logTransmissions");
     mVisualizeTrajectory = par("visualizeTrajectory");
@@ -100,14 +135,24 @@ void BaseMcService::initialize()
     if (mRequestTimeout > mLeadTime) {
         throw cRuntimeError("requestTimeout must not exceed leadTime (thesis Section 4.1)");
     }
-    if (mLeadTime + SimTime(mLaneChangeDuration) > SimTime(mNumPoints * mPointSpacing)) {
-        throw cRuntimeError("lead time and lane change duration have to fit into the trajectory horizon");
+    if (mLeadTime >= SimTime(mNumPoints * mPointSpacing)) {
+        throw cRuntimeError("the lead time has to be shorter than the trajectory horizon");
     }
 
-    // lane changes are commanded by this service only
-    mVehicleController->getTraCI()->vehicle.setLaneChangeMode(vehicleId(), par("laneChangeMode").intValue());
+#ifdef WITH_ENVMOD
+    if (mUsePerception) {
+        // only present if the vehicle is equipped with sensors (artery.envmod.Car)
+        mEnvironmentModel = getFacilities().get_const_ptr<LocalEnvironmentModel>();
+    }
+#endif
 
-    // give the LDM time to fill before the first maneuver
+    auto& vehicle = mVehicleController->getTraCI()->vehicle;
+    // lane changes are commanded by this service only
+    vehicle.setLaneChangeMode(vehicleId(), par("laneChangeMode").intValue());
+    mLength = vehicle.getLength(vehicleId());
+    mWidth = vehicle.getWidth(vehicleId());
+
+    // give the neighbour table time to fill before the first manoeuvre
     mNextManeuverAllowed = simTime() + mManeuverCooldown;
 
     const std::string prefix = par("logPrefix").stdstringValue();
@@ -118,25 +163,27 @@ void BaseMcService::initialize()
 
 void BaseMcService::finish()
 {
+    // the vehicle may already have left SUMO, so do not touch it any more
+    mVehicleGone = true;
     if (mManeuver.id != 0) {
-        // the vehicle may already have left SUMO, so do not touch it any more
-        mVehicleGone = true;
         finishManeuver("unfinished", simTime());
+    } else if (mState == State::Yielding) {
+        releaseYield("unfinished", simTime());
     }
     if (mVisualizeTrajectory) {
-        eraseTrajectory();
+        eraseTrajectory("ref");
+        eraseTrajectory("req");
         getSystemModule()->unsubscribe("traci.close", this);
     }
-    recordScalar("mcmSentIntent", mSentByPhase[MC_INTENT]);
-    recordScalar("mcmSentRequest", mSentByPhase[MC_REQUEST]);
-    recordScalar("mcmSentAccept", mSentByPhase[MC_ACCEPT]);
-    recordScalar("mcmSentExecute", mSentByPhase[MC_EXECUTE]);
-    recordScalar("mcmSentCancel", mSentCancel);
+    recordScalar("mcmSent", mSent);
+    recordScalar("mcmSentWithRequest", mSentWithRequest);
+    recordScalar("mcmSentResponses", mSentResponses);
     recordScalar("mcmReceived", mReceived);
     recordScalar("mcmDropped", mDropped);
-    recordScalar("requestsDeclinedBusy", mDeclinedBusy);
-    recordScalar("requestsDeclinedLate", mDeclinedLate);
-    recordScalar("requestsDeclinedDeceleration", mDeclinedDeceleration);
+    recordScalar("requestsAccepted", mRequestsAccepted);
+    recordScalar("requestsDeclinedBusy", mRequestsDeclinedBusy);
+    recordScalar("requestsDeclinedCost", mRequestsDeclinedCost);
+    recordScalar("requestsDeclinedNotCooperative", mRequestsDeclinedNotCooperative);
     if (mcm::McLog::instance().isOpen()) {
         mcm::McLog::instance().flush();
     }
@@ -164,90 +211,39 @@ void BaseMcService::trigger()
         mStationLogged = true;
     }
 
+    expireNeighbours(now);
+
     switch (mState) {
         case State::Idle:
-            if (now >= mNextManeuverAllowed && checkLaneChangeWish(now)) {
-                break;
+            if (now >= mNextManeuverAllowed) {
+                checkLaneChangeWish(now);
             }
-            checkIntentTriggers(now);
             break;
         case State::Requesting:
-            if (now - mManeuver.announced >= mRequestTimeout) {
-                sendCancel(mManeuver);
-                finishManeuver("cancelled_timeout", now);
-                checkIntentTriggers(now);
-            } else if (now - mLastSent >= mRequestRepeatInterval) {
-                // repetitions carry the same trajectory with the same generation time
-                sendMcm(*mManeuver.announcement);
-            }
+            updateRequest(now);
             break;
-        case State::Accepted:
-            if (now >= mManeuver.lateralStart) {
-                execute(now);
-            } else {
-                resend(now);
-            }
+        case State::Committed:
+            updateCommitted(now);
             break;
         case State::Executing:
-            checkExecution(now);
+            updateExecution(now);
             break;
-        case State::Partner:
-            updatePartner(now);
-            break;
-        case State::Silent:
-            if (now >= mSilentUntil) {
-                mState = State::Idle;
-                mForceIntent = true;
-                checkIntentTriggers(now);
-            }
+        case State::Yielding:
+            updateYield(now);
             break;
     }
+
+    transmit(now);
 }
 
-void BaseMcService::checkIntentTriggers(const SimTime& now)
-{
-    if (mLastSent != SimTime::ZERO && now - mLastSent < mMinInterval) {
-        return;
-    }
+// --- own manoeuvres -------------------------------------------------------
 
-    const auto& vdp = *mVehicleDataProvider;
-    bool send = mForceIntent || now - mLastIntent >= mMaxInterval;
-    send = send || distance(mLastIntentPosition, vdp.position()).value() > mPositionDelta;
-    send = send || std::abs(mcm::wrapAngle(headingDegrees(vdp) - mLastIntentHeading)) > mHeadingDelta;
-    send = send || std::abs(speedOf(vdp) - mLastIntentSpeed) > mSpeedDelta;
-    if (send) {
-        sendIntent(now);
-    }
-}
-
-void BaseMcService::sendIntent(const SimTime& now)
-{
-    // consecutive keep lane announcements form one maneuver, a new one starts after every lane change
-    if (mManeuverCounter == 0 || mForceIntent) {
-        ++mManeuverCounter;
-    }
-
-    auto msg = createMessage(MC_INTENT, MC_KEEP_LANE, mManeuverCounter);
-    const auto lane = mPlanner->laneState();
-    McLongitudinalProfile lon;
-    lon.v0 = speedOf(*mVehicleDataProvider);
-    McLateralProfile lat;
-    lat.d0 = lane.lateralPosition;
-    mPlanner->plan(*msg, lane, lon, lat, mNumPoints, mPointSpacing);
-    sendMcm(*msg);
-
-    mLastIntent = now;
-    mLastIntentPosition = mVehicleDataProvider->position();
-    mLastIntentHeading = headingDegrees(*mVehicleDataProvider);
-    mLastIntentSpeed = lon.v0;
-    mForceIntent = false;
-}
-
-bool BaseMcService::checkLaneChangeWish(const SimTime& now)
+void BaseMcService::checkLaneChangeWish(const SimTime& now)
 {
     const auto lane = mPlanner->laneState();
     if (lane.internal) {
-        return false;
+        mWishDirection = 0;
+        return;
     }
 
     auto& vehicle = mVehicleController->getTraCI()->vehicle;
@@ -257,9 +253,8 @@ bool BaseMcService::checkLaneChangeWish(const SimTime& now)
         // first: state computed by the lane change model, regardless of the lane change mode
         const int state = vehicle.getLaneChangeState(vehicleId(), direction).first;
         const int want = direction > 0 ? LCA_LEFT : LCA_RIGHT;
-        const int blockedByLeader = direction > 0 ? LCA_BLOCKED_BY_LEFT_LEADER : LCA_BLOCKED_BY_RIGHT_LEADER;
-        if (!(state & want) || !(state & mWishReasons) || (state & blockedByLeader)) {
-            continue; // a blocking leader cannot be resolved by negotiating with the follower
+        if (!(state & want) || !(state & mWishReasons)) {
+            continue;
         }
         if (mPlanner->neighbourLane(lane, direction).empty()) {
             continue;
@@ -270,327 +265,187 @@ bool BaseMcService::checkLaneChangeWish(const SimTime& now)
         }
     }
 
-    if (!chosen) {
-        return false;
+    // SUMO's wishes, in particular speed gain, flicker: a wish has to persist
+    if (chosen != mWishDirection) {
+        mWishDirection = chosen;
+        mWishSince = now;
+    }
+    if (!chosen || now - mWishSince < mWishPersistence) {
+        return;
     }
 
     McManeuverType type = chosen > 0 ? MC_LANE_CHANGE_LEFT : MC_LANE_CHANGE_RIGHT;
     if ((chosenState & LCA_STRATEGIC) && mPlanner->laneEnds(lane)) {
         type = MC_MERGE;
     }
-    startLaneChange(chosen, type, now);
-    return true;
+    mWishDirection = 0;
+    startManeuver(chosen, type, now);
 }
 
-void BaseMcService::startLaneChange(int direction, McManeuverType type, const SimTime& now)
+void BaseMcService::startManeuver(int direction, McManeuverType type, const SimTime& now)
 {
     const auto lane = mPlanner->laneState();
     const std::string target = mPlanner->neighbourLane(lane, direction);
+    if (target.empty()) {
+        return;
+    }
     const double width = 0.5 * (mPlanner->laneWidth(lane.laneId) + mPlanner->laneWidth(target));
+    const double horizon = mNumPoints * mPointSpacing;
 
     Maneuver m;
-    m.id = ++mManeuverCounter;
+    m.id = nextTrajectoryId();
     m.type = type;
     m.direction = direction;
-    m.partnerId = findPartner(direction, width);
+    // drawn per manoeuvre, it has to fit into the trajectory horizon together with the lead time
+    m.laneChangeDuration = std::min(par("laneChangeDuration").doubleValue(), horizon - mLeadTime.dbl());
+
+    const double speed = mPlanner->vehicleSpeed();
+    // the path has to cover the manoeuvre and the horizon of the last announcement during it
+    const double pathLength = std::max(speed, 10.0) * (mLeadTime.dbl() + m.laneChangeDuration + horizon) + 50.0;
+    m.plan = mPlanner->planLane(lane, now.dbl(), pathLength);
+    m.plan.type = type;
+    m.originOffset = m.plan.lat.d0;
+    m.plan.lat.delta = direction * width - m.plan.lat.d0;
+    m.plan.lat.start = (now + mLeadTime).dbl();
+    m.plan.lat.duration = m.laneChangeDuration;
+    m.plan.lat.shape = mLateralShape;
     m.announced = now;
-    m.lateralStart = now + mLeadTime;
-    m.end = m.lateralStart + mLaneChangeDuration;
 
-    // without a vehicle behind the gap there is nobody to negotiate with
-    auto msg = createMessage(m.partnerId ? MC_REQUEST : MC_EXECUTE, type, m.id);
-    msg->setPartnerId(m.partnerId);
-    McLongitudinalProfile lon;
-    lon.v0 = speedOf(*mVehicleDataProvider);
-    McLateralProfile lat;
-    lat.d0 = lane.lateralPosition;
-    lat.delta = direction * width - lane.lateralPosition;
-    lat.start = mLeadTime.dbl();
-    lat.duration = mLaneChangeDuration;
-    mPlanner->plan(*msg, lane, lon, lat, mNumPoints, mPointSpacing);
-    m.announcement = std::move(msg);
-
+    bool blockedByUnknown = false;
+    m.affected = conflictsOf(m.plan, keepLanePlan(now), now, now, blockedByUnknown);
     mManeuver = std::move(m);
-    mState = mManeuver.partnerId ? State::Requesting : State::Accepted;
-    sendMcm(*mManeuver.announcement);
 
-    // hold the announced constant speed (thesis Section 5.2)
-    mVehicleController->getTraCI()->vehicle.setSpeed(vehicleId(), lon.v0);
-}
+    // the announced constant speed is held until the lane change is completed (thesis Section 5.2)
+    holdSpeed(speed);
 
-uint32_t BaseMcService::findPartner(int direction, double laneWidth) const
-{
-    // nearest vehicle in the target lane behind the own front, known from received CAMs
-    const Geo own = geoOf(*mVehicleDataProvider);
-    const double heading = headingDegrees(*mVehicleDataProvider);
-    const Enu forward = mcm::headingVector(heading);
-    const Enu left = mcm::leftVector(heading);
-    const SimTime now = simTime();
-
-    uint32_t partner = 0;
-    double nearest = -mPartnerSearchDistance;
-    for (const auto& entry : mLocalDynamicMap->allEntries()) {
-        const auto& cam = entry.second.cam();
-        const auto& params = cam->cam.camParameters;
-        const auto& ref = params.basicContainer.referencePosition;
-        Enu relative = mcm::toEnu(own, Geo { ref.latitude * 1e-7, ref.longitude * 1e-7 });
-
-        // extrapolate the CAM position to now
-        if (params.highFrequencyContainer.present == HighFrequencyContainer_PR_basicVehicleContainerHighFrequency) {
-            const auto& hfc = params.highFrequencyContainer.choice.basicVehicleContainerHighFrequency;
-            const SimTime generated = mTimer->getTimeFor(mTimer->reconstructMilliseconds(cam->cam.generationDeltaTime));
-            const double age = std::max(0.0, (now - generated).dbl());
-            const double speed = hfc.speed.speedValue * 0.01;
-            relative = relative + (speed * age) * mcm::headingVector(hfc.heading.headingValue * 0.1);
-        }
-
-        const double lon = mcm::dot(relative, forward);
-        const double lat = direction * mcm::dot(relative, left);
-        if (lat > 0.5 * laneWidth && lat < 1.5 * laneWidth && lon <= 0.0 && lon > nearest) {
-            nearest = lon;
-            partner = entry.first;
-        }
+    if (mManeuver.affected.empty() && !blockedByUnknown) {
+        // free of conflicts: no cooperation needed, the lane change becomes the reference trajectory
+        commit(now);
+    } else {
+        mManeuver.negotiated = true;
+        mState = State::Requesting;
+        mSendNow = true;
     }
-    return partner;
 }
 
-void BaseMcService::execute(const SimTime& now)
+void BaseMcService::updateRequest(const SimTime& now)
 {
-    switch (decideExecution(mManeuver)) {
-        case Execution::Drive: {
-            const auto lane = mPlanner->laneState();
-            if (lane.internal || mPlanner->neighbourLane(lane, mManeuver.direction).empty()) {
-                sendCancel(mManeuver);
-                finishManeuver("failed_cancel", now);
-                return;
+    if (mExplicitResponses && !mManeuver.nacks.empty()) {
+        // explicit decline: no need to wait for the timeout
+        finishManeuver("declined", now);
+        return;
+    }
+
+    bool blockedByUnknown = false;
+    const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    bool granted = conflicts.empty() && !blockedByUnknown;
+    if (granted && mExplicitResponses) {
+        // every vehicle in conflict with the request has to agree, unless it has left the neighbourhood
+        for (uint32_t id : mManeuver.affected) {
+            if (mNeighbours.count(id) && !mManeuver.acks.count(id)) {
+                granted = false;
+                break;
             }
-            auto& vehicle = mVehicleController->getTraCI()->vehicle;
-            const auto position = vehicle.getPosition(vehicleId());
-            mManeuver.commandPosition = Enu { position.x, position.y };
-            mManeuver.commandHeading = vehicle.getAngle(vehicleId());
-            vehicle.changeLaneRelative(vehicleId(), mManeuver.direction, 0.2);
-            mManeuver.announcement->setPhase(MC_EXECUTE);
-            mState = State::Executing;
-            sendMcm(*mManeuver.announcement);
-            break;
         }
-        case Execution::AbortWithCancel:
-            sendCancel(mManeuver);
-            finishManeuver("aborted_cancel", now);
-            break;
-        case Execution::AbortSilent: {
-            // no message at all until the announcement has expired
-            const SimTime expiry = mManeuver.announced + mcm::horizonOf(*mManeuver.announcement);
+    }
+
+    if (granted) {
+        commit(now);
+    } else if (now - mManeuver.announced >= mRequestTimeout) {
+        // withdrawn: the next MCM carries no requested trajectory any more
+        finishManeuver("timeout", now);
+    }
+}
+
+void BaseMcService::commit(const SimTime& now)
+{
+    mManeuver.committed = now;
+    mState = State::Committed;
+    // the requested trajectory becomes the reference trajectory, keeping its id
+    setReference(mManeuver.plan, mManeuver.type, now, mManeuver.id);
+}
+
+void BaseMcService::updateCommitted(const SimTime& now)
+{
+    if (now.dbl() + mLateralLookahead < mManeuver.plan.lat.start) {
+        return;
+    }
+
+    if (!mManeuver.executionDecided) {
+        mManeuver.execution = decideExecution(mManeuver);
+        mManeuver.executionDecided = true;
+    }
+
+    if (!mManeuver.execution.drive) {
+        if (mManeuver.execution.announce) {
+            finishManeuver("aborted_announced", now);
+        } else {
+            mSilentUntil = mLastSent + SimTime(mNumPoints * mPointSpacing);
             finishManeuver("aborted_silent", now);
-            mSilentUntil = expiry;
-            mState = State::Silent;
-            break;
         }
+        return;
     }
+
+    // last check before the lateral movement, as with the on-board sensors in TR 103 578 clause 5.2.3
+    bool blockedByUnknown = false;
+    const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    if (!conflicts.empty() || blockedByUnknown) {
+        finishManeuver("failed_gap", now);
+        return;
+    }
+
+    mState = State::Executing;
+    updateExecution(now);
 }
 
-void BaseMcService::checkExecution(const SimTime& now)
+void BaseMcService::updateExecution(const SimTime& now)
 {
-    if (!mManeuver.started) {
-        // lateral displacement since the command, SUMO coordinates (x east, y north)
-        auto& vehicle = mVehicleController->getTraCI()->vehicle;
-        const auto position = vehicle.getPosition(vehicleId());
-        const Enu moved = Enu { position.x, position.y } - mManeuver.commandPosition;
-        const double lateral = mManeuver.direction * mcm::dot(moved, mcm::leftVector(mManeuver.commandHeading));
-        if (lateral > 0.05) {
-            mManeuver.started = true;
-        } else if (now - mManeuver.lateralStart > mStartTolerance) {
-            sendCancel(mManeuver);
-            finishManeuver("failed_cancel", now);
-            return;
-        } else if (!mPlanner->laneState().internal) {
-            vehicle.changeLaneRelative(vehicleId(), mManeuver.direction, 0.2);
-        }
+    const Execution& execution = mManeuver.execution;
+    if (!mManeuver.aborting && execution.abortAfter >= 0.0 &&
+            now.dbl() >= mManeuver.plan.lat.start + execution.abortAfter) {
+        beginReturn(execution.announce ? "aborted_announced" : "aborted_silent", execution.announce, now);
     }
 
-    if (now >= mManeuver.end) {
-        finishManeuver("executed", now);
-        checkIntentTriggers(now);
+    // SUMO refuses lateral movements which would cause a collision: detect a lane change which lags behind
+    const double actual = mPlanner->project(mManeuver.plan, mPlanner->vehiclePosition()).lateral;
+    const double planned = mManeuver.plan.lat.offset(now.dbl());
+    if (std::abs(actual - planned) > mLateralTolerance) {
+        if (mManeuver.blockedSince == SimTime::ZERO) {
+            mManeuver.blockedSince = now;
+        } else if (!mManeuver.aborting && now - mManeuver.blockedSince >= mBlockedTimeout) {
+            beginReturn("failed_blocked", true, now);
+        }
     } else {
-        resend(now);
-    }
-}
-
-void BaseMcService::resend(const SimTime& now)
-{
-    if (now - mLastSent >= mExecutionRepeatInterval) {
-        sendMcm(*mManeuver.announcement);
-    }
-}
-
-void BaseMcService::indicate(const vanetza::btp::DataIndication& ind, cPacket* packet)
-{
-    Enter_Method("indicate");
-    std::unique_ptr<McMessage> msg { check_and_cast<McMessage*>(packet) };
-    ++mReceived;
-    if (isDropped(*msg)) {
-        ++mDropped;
-        return;
+        mManeuver.blockedSince = SimTime::ZERO;
     }
 
-    // the detector consumes MCMs through this signal, after the simulated loss
-    emit(scSignalMcmReceived, msg.get());
-
-    const SimTime now = simTime();
-    if (msg->getCancel()) {
-        handleCancel(*msg);
-    } else if (msg->getPhase() == MC_REQUEST) {
-        handleRequest(*msg, now);
-    } else if (msg->getPhase() == MC_ACCEPT) {
-        handleAccept(*msg);
-    }
-}
-
-bool BaseMcService::isDropped(const McMessage& msg)
-{
-    const bool droppable = msg.getCancel() || msg.getPhase() == MC_ACCEPT;
-    return droppable && mDropProbability > 0.0 && uniform(0.0, 1.0) < mDropProbability;
-}
-
-void BaseMcService::handleRequest(const McMessage& msg, const SimTime& now)
-{
-    if (msg.getPartnerId() != stationId()) {
-        return;
-    }
-
-    // repetition of a request already accepted: our accept may have been lost
-    if (mState == State::Partner && mManeuver.partnerId == msg.getStationId() &&
-            mManeuver.partnerManeuverId == msg.getManeuverId()) {
-        if (now - mLastSent >= mRequestRepeatInterval) {
-            sendMcm(*mManeuver.announcement);
-        }
-        return;
-    }
-
-    if (mState != State::Idle) {
-        ++mDeclinedBusy;
-        return; // busy with an own maneuver: no answer, the requester times out
-    }
-
-    // start of the lateral movement in the announced trajectory
-    const double heading = mcm::headingOf(msg);
-    const Enu forward = mcm::headingVector(heading);
-    const Enu left = mcm::leftVector(heading);
-    double lateralStart = -1.0;
-    double previousTime = 0.0;
-    for (unsigned i = 0; i < msg.getPointsArraySize(); ++i) {
-        const McTrajectoryPoint& point = msg.getPoints(i);
-        const Enu p { point.deltaEast * 0.01, point.deltaNorth * 0.01 };
-        if (std::abs(mcm::dot(p, left)) > 0.2) {
-            lateralStart = previousTime;
-            break;
-        }
-        previousTime = point.timeOffset * 1e-3;
-    }
-    if (lateralStart < 0.0) {
-        return;
-    }
-
-    const SimTime generated = generationTimeOf(msg);
-    const double tau = lateralStart - (now - generated).dbl();
-    if (tau < 0.3) {
-        ++mDeclinedLate;
-        return; // too late to open a gap
-    }
-
-    // current gap between own front and the requester's rear, from the requester's announcement
-    const auto requester = mcm::sampleTrajectory(msg, std::min(lateralStart, (now - generated).dbl()));
-    const Enu own = mcm::toEnu(mcm::referenceOf(msg), geoOf(*mVehicleDataProvider));
-    const double gap = mcm::dot(requester.position - own, forward) - mAssumedVehicleLength;
-    const double v = speedOf(*mVehicleDataProvider);
-    const double vReq = requester.speed;
-
-    // decelerate constantly until the speed of the requester is reached, so that the gap
-    // does not fall below the safe gap: (v - vReq)^2 / (2 a) <= gap - minGap - vReq * headway
-    double decel = 0.0;
-    double decelDuration = 0.0;
-    double vt = v;
-    if (v > vReq) {
-        const double margin = gap - mAcceptMinGap - vReq * mAcceptHeadway;
-        decel = margin > 0.0 ? (v - vReq) * (v - vReq) / (2.0 * margin) : std::numeric_limits<double>::infinity();
-        decelDuration = (v - vReq) / decel;
-        vt = vReq;
-    } else if (gap + (vReq - v) * tau < mAcceptMinGap + v * mAcceptHeadway) {
-        decel = std::numeric_limits<double>::infinity(); // too close even without closing in
-    }
-    if (decel > mMaxAcceptDeceleration) {
-        ++mDeclinedDeceleration;
-        return; // no answer: the requester times out and cancels
-    }
-
-    Maneuver m;
-    m.id = ++mManeuverCounter;
-    m.type = MC_KEEP_LANE;
-    m.role = "partner";
-    m.partnerId = msg.getStationId();
-    m.partnerManeuverId = msg.getManeuverId();
-    m.announced = now;
-    m.lateralStart = now + tau;
-    m.end = std::min(m.lateralStart + mLaneChangeDuration + 0.5, now + mNumPoints * mPointSpacing);
-    m.acceptReceived = true;
-    m.holdSpeed = vt;
-    m.holdFrom = now + decelDuration;
-
-    auto accept = createMessage(MC_ACCEPT, MC_KEEP_LANE, m.id);
-    accept->setPartnerId(m.partnerId);
-    accept->setPartnerManeuverId(m.partnerManeuverId);
-    const auto lane = mPlanner->laneState();
-    McLongitudinalProfile lon;
-    lon.v0 = v;
-    lon.accel = -decel;
-    lon.accelDuration = decelDuration;
-    McLateralProfile lat;
-    lat.d0 = lane.lateralPosition;
-    mPlanner->plan(*accept, lane, lon, lat, mNumPoints, mPointSpacing);
-    m.announcement = std::move(accept);
-
-    mManeuver = std::move(m);
-    mState = State::Partner;
-    sendMcm(*mManeuver.announcement);
-
-    auto& vehicle = mVehicleController->getTraCI()->vehicle;
-    if (decelDuration > 0.1) {
-        vehicle.slowDown(vehicleId(), vt, decelDuration);
+    if (now.dbl() >= mManeuver.plan.lat.end() + mLateralLookahead) {
+        finishManeuver(mManeuver.aborting ? mManeuver.abortReason : "executed", now);
     } else {
-        vehicle.setSpeed(vehicleId(), vt);
-        mManeuver.holding = true;
+        controlLateral(now);
     }
 }
 
-void BaseMcService::handleAccept(const McMessage& msg)
+void BaseMcService::beginReturn(const char* reason, bool announce, const SimTime& now)
 {
-    if (mState == State::Requesting && msg.getStationId() == mManeuver.partnerId &&
-            msg.getPartnerId() == stationId() && msg.getPartnerManeuverId() == mManeuver.id) {
-        mManeuver.acceptReceived = true;
-        mState = State::Accepted;
-    }
-}
+    McLateralProfile back;
+    back.d0 = mPlanner->project(mManeuver.plan, mPlanner->vehiclePosition()).lateral;
+    back.delta = mManeuver.originOffset - back.d0;
+    back.start = now.dbl();
+    back.duration = std::max(0.5, par("returnDuration").doubleValue());
+    back.shape = mLateralShape;
+    mManeuver.plan.lat = back;
+    mManeuver.aborting = true;
+    mManeuver.abortReason = reason;
+    mManeuver.blockedSince = SimTime::ZERO;
 
-void BaseMcService::handleCancel(const McMessage& msg)
-{
-    if (mState == State::Partner && msg.getStationId() == mManeuver.partnerId &&
-            msg.getCancelledManeuverId() == mManeuver.partnerManeuverId) {
-        finishManeuver("partner_released", simTime());
-    }
-}
-
-void BaseMcService::updatePartner(const SimTime& now)
-{
-    if (!mManeuver.holding && now >= mManeuver.holdFrom) {
-        mVehicleController->getTraCI()->vehicle.setSpeed(vehicleId(), mManeuver.holdSpeed);
-        mManeuver.holding = true;
-    }
-
-    if (now >= mManeuver.end) {
-        finishManeuver("partner_done", now);
-        checkIntentTriggers(now);
+    if (announce) {
+        // the new reference trajectory leads back into the origin lane
+        mManeuver.plan.type = MC_KEEP_LANE;
+        setReference(mManeuver.plan, MC_KEEP_LANE, now);
     } else {
-        resend(now);
+        // silent: no MCM until the last announced trajectory has expired
+        mSilentUntil = std::max(mSilentUntil, mLastSent + SimTime(mNumPoints * mPointSpacing));
     }
 }
 
@@ -598,29 +453,436 @@ void BaseMcService::finishManeuver(const char* outcome, const SimTime& now)
 {
     auto& log = mcm::McLog::instance();
     if (log.isOpen()) {
-        log.maneuvers() << stationId() << "," << vehicleId() << "," << mManeuver.id << ","
-            << mManeuver.role << "," << static_cast<int>(mManeuver.type) << ","
-            << mManeuver.partnerId << "," << mManeuver.partnerManeuverId << ","
-            << mManeuver.announced.dbl() << "," << mManeuver.lateralStart.dbl() << "," << now.dbl() << ","
-            << outcome << "," << mManeuver.acceptReceived << "," << mManeuver.cancelSent << "\n";
+        log.maneuvers() << stationId() << "," << vehicleId() << "," << mManeuver.id << ",requester,"
+            << static_cast<int>(mManeuver.type) << "," << joinIds(mManeuver.affected) << ","
+            << mManeuver.announced.dbl() << "," << (mManeuver.committed == SimTime::ZERO ? -1.0 : mManeuver.committed.dbl()) << ","
+            << mManeuver.plan.lat.start << "," << now.dbl() << "," << outcome << ","
+            << mManeuver.negotiated << "," << joinIds(mManeuver.acks) << "," << joinIds(mManeuver.nacks) << ","
+            << mManeuver.laneChangeDuration << "," << mManeuver.execution.abortAfter << "\n";
     }
 
-    releaseSpeed();
     mManeuver = Maneuver();
     mState = State::Idle;
-    mForceIntent = true;
     mNextManeuverAllowed = now + mManeuverCooldown;
+    mWishDirection = 0;
+    if (!mVehicleGone) {
+        releaseSpeed();
+        setReference(keepLanePlan(now), MC_KEEP_LANE, now);
+    }
 }
 
-void BaseMcService::releaseSpeed()
+// --- partner role -----------------------------------------------------------
+
+void BaseMcService::handleRequest(const Neighbour& n, const SimTime& now)
 {
-    if (mVehicleGone) {
+    const uint32_t requester = n.msg->getStationId();
+    const uint16_t requestId = n.msg->getRequestedId();
+    const auto key = std::make_pair(requester, requestId);
+
+    if (mState == State::Yielding && mYield.requester == requester && mYield.requestId == requestId) {
+        return; // already cooperating
+    }
+    if (mEvaluatedRequests.count(key)) {
+        // repetition of a request already answered: keep an explicit answer alive
+        auto found = mResponses.find(key);
+        if (found != mResponses.end()) {
+            found->second.until = now + mResponseLifetime;
+        }
         return;
     }
-    mVehicleController->getTraCI()->vehicle.setSpeed(vehicleId(), -1.0);
+
+    // cheap distance check first, the conflict check needs the own plan from SUMO
+    const Enu offset = mcm::toEnu(geoOf(*mVehicleDataProvider), mcm::referenceOf(*n.msg));
+    if (mcm::length(offset) > mRequestRange) {
+        return;
+    }
+    if (mReference.empty() || !affectedBy(n, mReference, now)) {
+        return; // no conflict with the own plan (yet), evaluated again with the next repetition
+    }
+    mEvaluatedRequests.insert(key);
+
+    if (!isCooperative()) {
+        ++mRequestsDeclinedNotCooperative;
+        respond(requester, requestId, false, MC_RESPONSE_NOT_COOPERATIVE, now);
+        return;
+    }
+    if (mState != State::Idle) {
+        ++mRequestsDeclinedBusy;
+        respond(requester, requestId, false, MC_RESPONSE_BUSY, now);
+        return;
+    }
+
+    Yield yield;
+    McPlan plan;
+    if (!findYieldPlan(n, now, yield, plan)) {
+        ++mRequestsDeclinedCost;
+        respond(requester, requestId, false, MC_RESPONSE_COST, now);
+        return;
+    }
+
+    ++mRequestsAccepted;
+    const double speed = mPlanner->vehicleSpeed();
+    mYield = yield;
+    mYield.startSpeed = speed;
+    mState = State::Yielding;
+    setReference(plan, MC_YIELD, now);
+    respond(requester, requestId, true, MC_RESPONSE_ACCEPT, now);
+
+    if (std::abs(yield.deceleration) > 0.0 && std::abs(speed - yield.targetSpeed) > 0.05) {
+        // slowDown changes the speed linearly over the given duration, in both directions
+        const double duration = std::abs(speed - yield.targetSpeed) / std::abs(yield.deceleration);
+        mVehicleController->getTraCI()->vehicle.slowDown(vehicleId(), yield.targetSpeed, duration);
+    } else {
+        holdSpeed(yield.targetSpeed);
+        mYield.holding = true;
+    }
 }
 
-std::unique_ptr<McMessage> BaseMcService::createMessage(McPhase phase, McManeuverType type, uint16_t maneuverId) const
+bool BaseMcService::findYieldPlan(const Neighbour& n, const SimTime& now, Yield& yield, McPlan& plan) const
+{
+    const McPoints requested = mcm::requestedPoints(*n.msg);
+    if (requested.empty()) {
+        return false;
+    }
+    const double speed = mPlanner->vehicleSpeed();
+    const double requesterSpeed = requested.back().speed * 0.01;
+    const double horizon = mNumPoints * mPointSpacing;
+    const McPlan base = keepLanePlan(now);
+    const double allowed = mVehicleController->getTraCI()->vehicle.getAllowedSpeed(vehicleId());
+
+    // candidates in order of increasing effort: first the smallest change of speed,
+    // then the smallest acceleration
+    for (double loss = 0.0; loss <= mMaxYieldSpeedLoss + 1e-6; loss += 1.0) {
+        std::vector<std::pair<double, double>> candidates; // (target speed, acceleration)
+        const double slower = std::min(speed, requesterSpeed) - loss;
+        if (slower >= 0.0) {
+            if (speed - slower < 0.05) {
+                candidates.emplace_back(speed, 0.0);
+            } else {
+                for (double a = 0.5; a <= mMaxYieldDeceleration + 1e-6; a += 0.5) {
+                    candidates.emplace_back(slower, -a);
+                }
+            }
+        }
+        const double faster = std::min(allowed, std::max(speed, requesterSpeed) + loss);
+        if (mMaxYieldAcceleration > 0.0 && faster - speed > 0.05) {
+            for (double a = 0.5; a <= mMaxYieldAcceleration + 1e-6; a += 0.5) {
+                candidates.emplace_back(faster, a);
+            }
+        }
+
+        for (const auto& candidate : candidates) {
+            McPlan trial = base;
+            trial.lon.v0 = speed;
+            trial.lon.accel = candidate.second;
+            trial.lon.accelDuration = candidate.second != 0.0 ? std::abs(candidate.first - speed) / std::abs(candidate.second) : 0.0;
+            trial.lon.maxSpeed = candidate.second > 0.0 ? candidate.first : 1e9;
+            trial.type = MC_YIELD;
+            if (!affectedBy(n, trial, now)) {
+                plan = trial;
+                yield.requester = n.msg->getStationId();
+                yield.requestId = n.msg->getRequestedId();
+                yield.since = now;
+                yield.until = n.generated + SimTime(std::min(mcm::horizonOf(requested), horizon)) + SimTime(0.5);
+                yield.targetSpeed = candidate.second != 0.0 ? candidate.first : speed;
+                yield.deceleration = candidate.second;
+                yield.holding = false;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void BaseMcService::updateYield(const SimTime& now)
+{
+    auto found = mNeighbours.find(mYield.requester);
+    const bool requested = found != mNeighbours.end() && found->second.msg->getRequestedId() == mYield.requestId;
+    const bool executing = found != mNeighbours.end() && found->second.msg->getReferenceId() == mYield.requestId;
+    mYield.executionSeen = mYield.executionSeen || executing;
+    if (!requested && !executing) {
+        // request withdrawn, manoeuvre completed or aborted with a new reference trajectory
+        releaseYield(mYield.executionSeen ? "partner_done" : "partner_released", now);
+        return;
+    }
+    if (now >= mYield.until) {
+        releaseYield("partner_expired", now);
+        return;
+    }
+
+    if (!mYield.holding) {
+        const double duration = mYield.deceleration != 0.0 ?
+            std::abs(mYield.startSpeed - mYield.targetSpeed) / std::abs(mYield.deceleration) : 0.0;
+        if (now >= mYield.since + SimTime(duration)) {
+            holdSpeed(mYield.targetSpeed);
+            mYield.holding = true;
+        }
+    }
+}
+
+void BaseMcService::releaseYield(const char* outcome, const SimTime& now)
+{
+    auto& log = mcm::McLog::instance();
+    if (log.isOpen()) {
+        log.maneuvers() << stationId() << "," << vehicleId() << "," << mReferenceId << ",yielder,"
+            << static_cast<int>(MC_YIELD) << "," << mYield.requester << ","
+            << mYield.since.dbl() << "," << mYield.since.dbl() << ",-1," << now.dbl() << "," << outcome << ","
+            << false << ",," << "," << "0,-1\n";
+    }
+
+    mYield = Yield();
+    mState = State::Idle;
+    if (!mVehicleGone) {
+        releaseSpeed();
+        setReference(keepLanePlan(now), MC_KEEP_LANE, now);
+    }
+}
+
+void BaseMcService::respond(uint32_t requester, uint16_t requestId, bool accept, McResponseReason reason, const SimTime& now)
+{
+    if (!mExplicitResponses) {
+        return; // base concept: the (adapted or unchanged) reference trajectory is the answer
+    }
+    PendingResponse pending;
+    pending.response.stationId = requester;
+    pending.response.trajectoryId = requestId;
+    pending.response.accept = accept;
+    pending.response.reason = reason;
+    pending.until = now + mResponseLifetime;
+    mResponses[std::make_pair(requester, requestId)] = pending;
+    mSendNow = true;
+}
+
+// --- conflicts ----------------------------------------------------------------
+
+std::vector<double> BaseMcService::checkTimes(const SimTime& now, double until) const
+{
+    std::vector<double> times;
+    const double end = std::min(until, now.dbl() + mNumPoints * mPointSpacing);
+    for (double t = now.dbl(); t <= end + 1e-6; t += mCheckStep) {
+        times.push_back(t);
+    }
+    return times;
+}
+
+Body BaseMcService::neighbourBody(const Neighbour& n, const McPoints& points, const Geo& origin, double t) const
+{
+    const auto sample = mcm::sampleExtrapolated(points, t - n.generated.dbl());
+    Body body;
+    body.front = mcm::toEnu(origin, mcm::referenceOf(*n.msg)) + sample.position;
+    body.heading = sample.valid ? sample.heading : mcm::headingOf(*n.msg);
+    body.speed = sample.valid ? sample.speed : n.msg->getSpeed() * 0.01;
+    body.length = n.msg->getVehicleLength() > 0 ? n.msg->getVehicleLength() * 0.1 : 5.0;
+    body.width = n.msg->getVehicleWidth() > 0 ? n.msg->getVehicleWidth() * 0.1 : 1.8;
+    return body;
+}
+
+std::set<uint32_t> BaseMcService::conflictsOf(const McPlan& plan, const McPlan& keep, const SimTime& now,
+        const SimTime& requestTime, bool& blockedByUnknown) const
+{
+    std::set<uint32_t> result;
+    blockedByUnknown = false;
+
+    // only conflicts caused by the manoeuvre count, not those of ordinary car following
+    const auto times = checkTimes(now, plan.lat.end() + 1.0);
+    const Geo origin = mPlanner->vehicleGeo();
+    const auto moving = mPlanner->footprints(plan, times, mLength, mWidth);
+    const auto keeping = mPlanner->footprints(keep, times, mLength, mWidth);
+    auto causedBy = [&](const std::function<Body(double)>& other) {
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            const Body b = other(times[i]);
+            if (mcm::conflicts(moving[i], b, mConflictRules) && !mcm::conflicts(keeping[i], b, mConflictRules)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    std::vector<Enu> known; // current positions of vehicles known from MCMs
+    for (const auto& entry : mNeighbours) {
+        const Neighbour& n = entry.second;
+        if (mcm::length(mcm::toEnu(origin, mcm::referenceOf(*n.msg))) > mRequestRange) {
+            continue; // too far away to be affected within the horizon
+        }
+        const McPoints reference = mcm::referencePoints(*n.msg);
+        known.push_back(neighbourBody(n, reference, origin, now.dbl()).front);
+        if (causedBy([&](double t) { return neighbourBody(n, reference, origin, t); })) {
+            result.insert(entry.first);
+            continue;
+        }
+        // an earlier request of another vehicle has precedence (TR 103 578 clause 5.2.3),
+        // ties are broken by the station id
+        const bool earlier = n.requestSeen < requestTime || (n.requestSeen == requestTime && entry.first < stationId());
+        if (n.msg->getRequestedId() != 0 && earlier) {
+            const McPoints requested = mcm::requestedPoints(*n.msg);
+            if (causedBy([&](double t) { return neighbourBody(n, requested, origin, t); })) {
+                result.insert(entry.first);
+            }
+        }
+    }
+
+#ifdef WITH_ENVMOD
+    // vehicles without MCM, perceived by the own sensors, extrapolated at constant velocity
+    if (mEnvironmentModel) {
+        for (const auto& tracked : mEnvironmentModel->allObjects()) {
+            auto object = tracked.first.lock();
+            auto vehicle = dynamic_cast<const TraCIEnvironmentModelObject*>(object.get());
+            if (!vehicle) {
+                continue;
+            }
+            const auto& data = vehicle->getVehicleData();
+            const Enu position = mcm::toEnu(origin, geoOf(data));
+            const bool hasMcm = std::any_of(known.begin(), known.end(),
+                    [&position](const Enu& p) { return mcm::length(p - position) < 3.0; });
+            if (hasMcm) {
+                continue;
+            }
+            const double heading = headingDegrees(data);
+            const double speed = data.speed().value();
+            const double length = vehicle->getLength().value();
+            const double width = vehicle->getWidth().value();
+            if (causedBy([&](double t) {
+                    Body b;
+                    b.front = position + ((t - now.dbl()) * speed) * mcm::headingVector(heading);
+                    b.heading = heading;
+                    b.speed = speed;
+                    b.length = length;
+                    b.width = width;
+                    return b;
+                })) {
+                blockedByUnknown = true;
+                break;
+            }
+        }
+    }
+#endif
+
+    return result;
+}
+
+bool BaseMcService::affectedBy(const Neighbour& n, const McPlan& own, const SimTime& now) const
+{
+    const McPoints requested = mcm::requestedPoints(*n.msg);
+    if (requested.empty()) {
+        return false;
+    }
+    const McPoints reference = mcm::referencePoints(*n.msg);
+    const auto times = checkTimes(now, n.generated.dbl() + mcm::horizonOf(requested));
+    const Geo origin = mPlanner->vehicleGeo();
+    const auto mine = mPlanner->footprints(own, times, mLength, mWidth);
+    for (std::size_t i = 0; i < times.size(); ++i) {
+        // the requester is the reference body: conflicts are judged along its heading
+        const Body moving = neighbourBody(n, requested, origin, times[i]);
+        const Body keeping = neighbourBody(n, reference, origin, times[i]);
+        if (mcm::conflicts(moving, mine[i], mConflictRules) && !mcm::conflicts(keeping, mine[i], mConflictRules)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// --- reference trajectory and transmission ----------------------------------
+
+McPlan BaseMcService::keepLanePlan(const SimTime& now) const
+{
+    const auto lane = mPlanner->laneState();
+    const double horizon = mNumPoints * mPointSpacing;
+    McPlan plan = mPlanner->planLane(lane, now.dbl(), std::max(mPlanner->vehicleSpeed(), 10.0) * horizon + 30.0);
+    plan.type = MC_KEEP_LANE;
+    return plan;
+}
+
+void BaseMcService::setReference(const McPlan& plan, McManeuverType type, const SimTime& now, uint16_t id)
+{
+    if (id == 0) {
+        id = nextTrajectoryId();
+    }
+    mReference = plan;
+    mReferenceType = type;
+    mReferenceId = id;
+    mSendNow = true;
+}
+
+uint16_t BaseMcService::nextTrajectoryId()
+{
+    // ids identify trajectories of one sender, 0 means "none"
+    if (++mTrajectoryCounter == 0) {
+        ++mTrajectoryCounter;
+    }
+    return mTrajectoryCounter;
+}
+
+void BaseMcService::refreshReference(const SimTime& now)
+{
+    const double speed = mPlanner->vehicleSpeed();
+    switch (mState) {
+        case State::Idle:
+        case State::Requesting:
+            // lane keeping at the current speed, with the path of the current lane
+            mReference = keepLanePlan(now);
+            break;
+        case State::Committed:
+        case State::Executing:
+            mPlanner->anchor(mManeuver.plan, now.dbl(), speed);
+            mReference = mManeuver.plan;
+            break;
+        case State::Yielding: {
+            McPlan plan = keepLanePlan(now);
+            plan.type = MC_YIELD;
+            const double dv = mYield.targetSpeed - speed;
+            if (!mYield.holding && mYield.deceleration != 0.0 && std::abs(dv) > 0.05) {
+                plan.lon.accel = dv > 0.0 ? std::abs(mYield.deceleration) : -std::abs(mYield.deceleration);
+                plan.lon.accelDuration = std::abs(dv) / std::abs(mYield.deceleration);
+                plan.lon.maxSpeed = dv > 0.0 ? mYield.targetSpeed : 1e9;
+            }
+            mReference = plan;
+            break;
+        }
+    }
+    if (mState == State::Requesting) {
+        mPlanner->anchor(mManeuver.plan, now.dbl(), speed);
+    }
+}
+
+bool BaseMcService::deviatesFromReference(const SimTime& now) const
+{
+    if (mReference.empty()) {
+        return true;
+    }
+    const double t = now.dbl();
+    const auto actual = mPlanner->project(mReference, mPlanner->vehiclePosition());
+    const double plannedS = mReference.s0 + mReference.lon.distance(t - mReference.t0);
+    const double plannedSpeed = mReference.lon.speed(t - mReference.t0);
+    return std::abs(actual.s - plannedS) > mLongitudinalDeviation ||
+        std::abs(actual.lateral - mReference.lat.offset(t)) > mLateralDeviation ||
+        std::abs(mPlanner->vehicleSpeed() - plannedSpeed) > mSpeedDeviation;
+}
+
+void BaseMcService::transmit(const SimTime& now)
+{
+    if (now < mSilentUntil) {
+        return;
+    }
+    if (mLastSent != SimTime::ZERO && now - mLastSent < mMinInterval) {
+        return;
+    }
+
+    bool send = mSendNow || mLastSent == SimTime::ZERO || now - mLastSent >= mMaxInterval;
+    send = send || (mState == State::Requesting && now - mLastSent >= mRequestRepeatInterval);
+    send = send || deviatesFromReference(now);
+    if (!send) {
+        return;
+    }
+
+    refreshReference(now);
+    auto msg = createMessage(now);
+    beforeSend(*msg);
+    sendMcm(*msg);
+    mSendNow = false;
+    mLastSent = now;
+}
+
+std::unique_ptr<McMessage> BaseMcService::createMessage(const SimTime& now)
 {
     const auto& vdp = *mVehicleDataProvider;
     std::unique_ptr<McMessage> msg { new McMessage("MCM") };
@@ -629,23 +891,37 @@ std::unique_ptr<McMessage> BaseMcService::createMessage(McPhase phase, McManeuve
     msg->setLatitude(mcm::toTenthMicrodegree(vdp.latitude().value()));
     msg->setLongitude(mcm::toTenthMicrodegree(vdp.longitude().value()));
     msg->setHeading(static_cast<uint16_t>(std::lround(headingDegrees(vdp) * 10.0)) % 3600);
-    msg->setManeuverType(type);
-    msg->setPhase(phase);
-    msg->setManeuverId(maneuverId);
+    msg->setSpeed(static_cast<uint16_t>(std::lround(std::max(0.0, vdp.speed().value()) * 100.0)));
+    msg->setVehicleLength(static_cast<uint16_t>(std::lround(mLength * 10.0)));
+    msg->setVehicleWidth(static_cast<uint16_t>(std::lround(mWidth * 10.0)));
+
+    msg->setReferenceId(mReferenceId);
+    msg->setReferenceType(mReferenceType);
+    mcm::setReferencePoints(*msg, mPlanner->sample(mReference, now.dbl(), mNumPoints, mPointSpacing));
+
+    if (mState == State::Requesting) {
+        msg->setRequestedId(mManeuver.id);
+        msg->setRequestedType(mManeuver.type);
+        mcm::setRequestedPoints(*msg, mPlanner->sample(mManeuver.plan, now.dbl(), mNumPoints, mPointSpacing));
+    } else {
+        msg->setRequestedId(0);
+        msg->setRequestedType(MC_KEEP_LANE);
+    }
+
+    std::vector<McResponse> responses;
+    for (const auto& entry : mResponses) {
+        if (entry.second.until > now) {
+            responses.push_back(entry.second.response);
+        }
+    }
+    msg->setResponsesArraySize(responses.size());
+    for (unsigned i = 0; i < responses.size(); ++i) {
+        msg->setResponses(i, responses[i]);
+    }
     return msg;
 }
 
-void BaseMcService::sendCancel(Maneuver& m)
-{
-    auto msg = createMessage(m.announcement ? static_cast<McPhase>(m.announcement->getPhase()) : MC_INTENT, m.type, m.id);
-    msg->setPartnerId(m.partnerId);
-    msg->setCancel(true);
-    msg->setCancelledManeuverId(m.id);
-    sendMcm(*msg);
-    m.cancelSent = true;
-}
-
-void BaseMcService::sendMcm(const McMessage& msg)
+void BaseMcService::sendMcm(McMessage& msg)
 {
     using namespace vanetza;
     btp::DataRequestB req;
@@ -656,43 +932,160 @@ void BaseMcService::sendMcm(const McMessage& msg)
     req.gn.communication_profile = geonet::CommunicationProfile::ITS_G5;
 
     McMessage* packet = msg.dup();
-    packet->setByteLength(mHeaderBytes + mPointBytes * packet->getPointsArraySize());
+    const unsigned requested = packet->getRequestedArraySize();
+    packet->setByteLength(mHeaderBytes + mPointBytes * (packet->getReferenceArraySize() + requested) +
+        (packet->getRequestedId() != 0 ? mRequestHeaderBytes : 0) + mResponseBytes * packet->getResponsesArraySize());
     emit(scSignalMcmSent, packet);
 
-    if (packet->getCancel()) {
-        ++mSentCancel;
-    } else if (packet->getPhase() < 4) {
-        ++mSentByPhase[packet->getPhase()];
+    ++mSent;
+    if (packet->getRequestedId() != 0) {
+        ++mSentWithRequest;
     }
+    mSentResponses += packet->getResponsesArraySize();
 
     auto& log = mcm::McLog::instance();
     if (mLogTransmissions && log.isOpen()) {
         auto& out = log.transmissions();
-        out << simTime().dbl() << "," << generationTimeOf(*packet).dbl() << "," << packet->getStationId() << "," << packet->getManeuverId() << ","
-            << static_cast<int>(packet->getPhase()) << "," << static_cast<int>(packet->getManeuverType()) << ","
-            << packet->getPartnerId() << "," << packet->getPartnerManeuverId() << ","
-            << packet->getCancel() << "," << packet->getCancelledManeuverId() << ","
+        out << simTime().dbl() << "," << generationTimeOf(*packet).dbl() << "," << packet->getStationId() << ","
+            << stateName(static_cast<int>(mState)) << ","
+            << packet->getReferenceId() << "," << static_cast<int>(packet->getReferenceType()) << ","
+            << packet->getRequestedId() << "," << static_cast<int>(packet->getRequestedType()) << ","
             << packet->getGenerationDeltaTime() << "," << packet->getLatitude() << "," << packet->getLongitude() << ","
-            << packet->getHeading() << "," << packet->getByteLength() << ",";
-        for (unsigned i = 0; i < packet->getPointsArraySize(); ++i) {
-            const McTrajectoryPoint& p = packet->getPoints(i);
-            out << (i ? ";" : "") << p.timeOffset << ":" << p.deltaEast << ":" << p.deltaNorth
-                << ":" << p.speed << ":" << p.heading;
+            << packet->getHeading() << "," << packet->getSpeed() << ","
+            << packet->getVehicleLength() << "," << packet->getVehicleWidth() << "," << packet->getByteLength() << ",";
+        writePoints(out, mcm::referencePoints(*packet));
+        out << ",";
+        writePoints(out, mcm::requestedPoints(*packet));
+        out << ",";
+        for (unsigned i = 0; i < packet->getResponsesArraySize(); ++i) {
+            const McResponse& r = packet->getResponses(i);
+            out << (i ? ";" : "") << r.stationId << ":" << r.trajectoryId << ":" << r.accept << ":" << static_cast<int>(r.reason);
         }
         out << "\n";
     }
 
     if (mVisualizeTrajectory) {
-        if (packet->getCancel() || packet->getPointsArraySize() == 0) {
-            eraseTrajectory();
+        // blue keep lane, green lane change, cyan yield; requested trajectories orange
+        libsumo::TraCIColor color(30, 70, 130);
+        if (packet->getReferenceType() == MC_YIELD) {
+            color = libsumo::TraCIColor(0, 170, 210);
+        } else if (packet->getReferenceType() != MC_KEEP_LANE) {
+            color = libsumo::TraCIColor(140, 190, 30);
+        }
+        drawTrajectory("ref", mcm::referencePoints(*packet), *packet, color, packet->getReferenceType() == MC_KEEP_LANE ? 0.25 : 0.4);
+        if (requested > 0) {
+            drawTrajectory("req", mcm::requestedPoints(*packet), *packet, libsumo::TraCIColor(240, 150, 0), 0.4);
         } else {
-            drawTrajectory(*packet);
+            eraseTrajectory("req");
         }
     }
 
     request(req, packet);
-    mLastSent = simTime();
 }
+
+void BaseMcService::controlLateral(const SimTime& now)
+{
+    // closed loop on the lateral offset from the origin lane: SUMO moves the vehicle by
+    // the commanded distance within the next step (sublane model, limited by maxSpeedLat)
+    const double target = mManeuver.plan.lat.offset(now.dbl() + mLateralLookahead);
+    const double actual = mPlanner->project(mManeuver.plan, mPlanner->vehiclePosition()).lateral;
+    const double delta = target - actual;
+    if (std::abs(delta) > 0.005) {
+        mVehicleController->getTraCI()->vehicle.changeSublane(vehicleId(), delta);
+    }
+}
+
+void BaseMcService::holdSpeed(double speed)
+{
+    mVehicleController->getTraCI()->vehicle.setSpeed(vehicleId(), speed);
+}
+
+void BaseMcService::releaseSpeed()
+{
+    if (mVehicleGone) {
+        return;
+    }
+    mVehicleController->getTraCI()->vehicle.setSpeed(vehicleId(), -1.0);
+}
+
+// --- reception ----------------------------------------------------------------
+
+void BaseMcService::indicate(const vanetza::btp::DataIndication& ind, cPacket* packet)
+{
+    Enter_Method("indicate");
+    std::unique_ptr<McMessage> msg { check_and_cast<McMessage*>(packet) };
+    ++mReceived;
+    // p_drop: additional loss on top of the channel, e.g. to lose answers and aborts
+    if (mDropProbability > 0.0 && uniform(0.0, 1.0) < mDropProbability) {
+        ++mDropped;
+        return;
+    }
+
+    // the detector consumes MCMs through this signal, after the simulated loss
+    emit(scSignalMcmReceived, msg.get());
+
+    const SimTime now = simTime();
+    const uint32_t sender = msg->getStationId();
+    if (sender == stationId()) {
+        return;
+    }
+
+    // explicit answers to the own request
+    if (mState == State::Requesting) {
+        for (unsigned i = 0; i < msg->getResponsesArraySize(); ++i) {
+            const McResponse& r = msg->getResponses(i);
+            if (r.stationId == stationId() && r.trajectoryId == mManeuver.id) {
+                (r.accept ? mManeuver.acks : mManeuver.nacks).insert(sender);
+            }
+        }
+    }
+
+    Neighbour& n = mNeighbours[sender];
+    const uint16_t requestId = msg->getRequestedId();
+    if (requestId != 0 && (!n.msg || n.msg->getRequestedId() != requestId)) {
+        n.requestSeen = now;
+    }
+    n.generated = generationTimeOf(*msg);
+    n.received = now;
+    n.msg = std::move(msg);
+
+    if (requestId != 0 && !mVehicleGone) {
+        handleRequest(n, now);
+    }
+}
+
+void BaseMcService::expireNeighbours(const SimTime& now)
+{
+    for (auto it = mNeighbours.begin(); it != mNeighbours.end();) {
+        if (now - it->second.received > mNeighbourTimeout) {
+            it = mNeighbours.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = mEvaluatedRequests.begin(); it != mEvaluatedRequests.end();) {
+        auto found = mNeighbours.find(it->first);
+        if (found == mNeighbours.end() || found->second.msg->getRequestedId() != it->second) {
+            it = mEvaluatedRequests.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = mResponses.begin(); it != mResponses.end();) {
+        if (it->second.until <= now) {
+            it = mResponses.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+SimTime BaseMcService::generationTimeOf(const McMessage& msg) const
+{
+    return mTimer->getTimeFor(mTimer->reconstructMilliseconds(msg.getGenerationDeltaTime()));
+}
+
+// --- visualisation ------------------------------------------------------------
 
 void BaseMcService::receiveSignal(cComponent*, simsignal_t, const SimTime&, cObject*)
 {
@@ -700,22 +1093,14 @@ void BaseMcService::receiveSignal(cComponent*, simsignal_t, const SimTime&, cObj
     mTraciClosed = true;
 }
 
-void BaseMcService::drawTrajectory(const McMessage& msg)
+void BaseMcService::drawTrajectory(const std::string& suffix, const McPoints& trajectory, const McMessage& msg,
+        const libsumo::TraCIColor& color, double lineWidth)
 {
-    if (mTraciClosed) {
+    if (mTraciClosed || trajectory.empty()) {
         return;
     }
 
-    libsumo::TraCIColor color;
-    double lineWidth = 0.25;
-    double headWidth = 1.6;
-    if (msg.getManeuverType() == MC_KEEP_LANE) {
-        color = msg.getPhase() == MC_ACCEPT ? libsumo::TraCIColor(0, 170, 210) : libsumo::TraCIColor(30, 70, 130);
-    } else {
-        color = msg.getPhase() == MC_REQUEST ? libsumo::TraCIColor(240, 150, 0) : libsumo::TraCIColor(140, 190, 30);
-        lineWidth = 0.4;
-        headWidth = 2.4;
-    }
+    const double headWidth = lineWidth > 0.3 ? 2.4 : 1.6;
     const double headLength = 1.5 * headWidth;
 
     // The net uses a transverse Mercator projection centred on it, so grid north
@@ -725,8 +1110,7 @@ void BaseMcService::drawTrajectory(const McMessage& msg)
     const Geo ref = mcm::referenceOf(msg);
     const libsumo::TraCIPosition origin = api.convert2D(traci::TraCIGeoPosition { ref.longitude, ref.latitude });
     std::vector<Enu> points { Enu {} };
-    for (unsigned i = 0; i < msg.getPointsArraySize(); ++i) {
-        const McTrajectoryPoint& p = msg.getPoints(i);
+    for (const McTrajectoryPoint& p : trajectory) {
         points.push_back(Enu { p.deltaEast * 0.01, p.deltaNorth * 0.01 });
     }
 
@@ -751,8 +1135,8 @@ void BaseMcService::drawTrajectory(const McMessage& msg)
     }
     head.value = { toSumo(tip), toSumo(base + 0.5 * headWidth * side), toSumo(base - 0.5 * headWidth * side) };
 
-    const std::string id = "mcm." + vehicleId();
-    if (mTrajectoryDrawn) {
+    const std::string id = "mcm." + vehicleId() + "." + suffix;
+    if (mDrawn.count(suffix)) {
         api.polygon.setShape(id, line);
         api.polygon.setColor(id, color);
         api.polygon.setShape(id + ".head", head);
@@ -760,26 +1144,21 @@ void BaseMcService::drawTrajectory(const McMessage& msg)
     } else {
         api.polygon.add(id, line, color, false, "mcm", 100);
         api.polygon.add(id + ".head", head, color, true, "mcm", 100);
-        mTrajectoryDrawn = true;
+        mDrawn.insert(suffix);
     }
     api.polygon.setLineWidth(id, lineWidth);
 }
 
-void BaseMcService::eraseTrajectory()
+void BaseMcService::eraseTrajectory(const std::string& suffix)
 {
-    if (!mTrajectoryDrawn || mTraciClosed) {
+    if (!mDrawn.count(suffix) || mTraciClosed) {
         return;
     }
     auto& api = *mVehicleController->getTraCI();
-    const std::string id = "mcm." + vehicleId();
+    const std::string id = "mcm." + vehicleId() + "." + suffix;
     api.polygon.remove(id, 100);
     api.polygon.remove(id + ".head", 100);
-    mTrajectoryDrawn = false;
-}
-
-SimTime BaseMcService::generationTimeOf(const McMessage& msg) const
-{
-    return mTimer->getTimeFor(mTimer->reconstructMilliseconds(msg.getGenerationDeltaTime()));
+    mDrawn.erase(suffix);
 }
 
 } // namespace artery

@@ -32,7 +32,6 @@ target_link_libraries(core PUBLIC
 add_artery_subdirectory(veins SWITCH WITH_VEINS)
 add_artery_subdirectory(inet SWITCH WITH_INET)
 add_artery_subdirectory(storyboard SWITCH WITH_STORYBOARD)
-add_artery_subdirectory(mcm SWITCH WITH_MCM)
 
 add_artery_subdirectory(transfusion REQUIRES protobuf::libprotobuf SWITCH WITH_TRANSFUSION)
 add_artery_subdirectory(testbed REQUIRES INET SWITCH WITH_TESTBED)
@@ -46,6 +45,9 @@ add_artery_subdirectory(envmod REQUIRES INET SWITCH WITH_ENVMOD)
 if(WITH_ENVMOD)
     set_property(SOURCE application/VehicleMiddleware.cc APPEND PROPERTY COMPILE_DEFINITIONS "WITH_ENVMOD")
 endif()
+
+# after envmod: the MCM service uses its sensors if available
+add_artery_subdirectory(mcm SWITCH WITH_MCM)
 
 install(TARGETS core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ DESTINATION share/ned/artery FILES_MATCHING PATTERN "*.ned")

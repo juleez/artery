@@ -20,12 +20,15 @@ void McLog::open(const std::string& prefix)
 
     mPrefix = prefix;
     openFile(mStations, "stations", "station_id,vehicle_id,service");
+    // partners: vehicles in conflict with a request (requester) or the requester (yielder), separated by ';'
     openFile(mManeuvers, "maneuvers",
-        "station_id,vehicle_id,maneuver_id,role,type,partner_id,partner_maneuver_id,"
-        "t_announce,t_lateral_start,t_end,outcome,accept_received,cancel_sent");
+        "station_id,vehicle_id,maneuver_id,role,type,partners,"
+        "t_announce,t_commit,t_lateral_start,t_end,outcome,negotiated,acks,nacks,lane_change_duration,abort_after");
+    // trajectories: timeOffset:deltaEast:deltaNorth:speed:heading separated by ';',
+    // responses: station_id:trajectory_id:accept:reason separated by ';'
     openFile(mTransmissions, "mcm-tx",
-        "time,generation_time,station_id,maneuver_id,phase,type,partner_id,partner_maneuver_id,cancel,cancelled_maneuver_id,"
-        "generation_delta_time,latitude,longitude,heading,bytes,points");
+        "time,generation_time,station_id,state,reference_id,reference_type,requested_id,requested_type,"
+        "generation_delta_time,latitude,longitude,heading,speed,length,width,bytes,reference,requested,responses");
 }
 
 void McLog::flush()

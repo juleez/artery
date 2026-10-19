@@ -1,12 +1,12 @@
 #ifndef ARTERY_MCM_MCGEOMETRY_H_
 #define ARTERY_MCM_MCGEOMETRY_H_
 
+#include "artery/mcm/Mcm_m.h"
 #include <cstdint>
+#include <vector>
 
 namespace artery
 {
-
-class McMessage;
 
 namespace mcm
 {
@@ -58,6 +58,13 @@ Geo referenceOf(const McMessage&);
 /** heading of an MCM sender (basic container) in degree */
 double headingOf(const McMessage&);
 
+using McPoints = std::vector<McTrajectoryPoint>;
+
+McPoints referencePoints(const McMessage&);
+McPoints requestedPoints(const McMessage&);
+void setReferencePoints(McMessage&, const McPoints&);
+void setRequestedPoints(McMessage&, const McPoints&);
+
 /**
  * Announced state at a time after the generation time of an MCM.
  * The reference position counts as trajectory point at time 0 (thesis Section 4.3).
@@ -70,9 +77,39 @@ struct TrajectorySample
     double heading = 0.0;   //< degree, direction of the secant between enclosing points
 };
 
-TrajectorySample sampleTrajectory(const McMessage&, double t);
-/** time of last trajectory point in seconds, 0 if the message has no trajectory */
-double horizonOf(const McMessage&);
+TrajectorySample sampleTrajectory(const McPoints&, double t);
+/** as sampleTrajectory, but continues the last segment at constant speed beyond the horizon */
+TrajectorySample sampleExtrapolated(const McPoints&, double t);
+/** time of last trajectory point in seconds, 0 if there are no points */
+double horizonOf(const McPoints&);
+
+/**
+ * Footprint of a vehicle at one instant in a common local tangent plane.
+ * The position is the centre of the front bumper, the vehicle extends
+ * length metres against its heading.
+ */
+struct Body
+{
+    Enu front;
+    double heading = 0.0;   //< degree, clockwise from north
+    double speed = 0.0;     //< m/s
+    double length = 5.0;    //< m
+    double width = 1.8;     //< m
+};
+
+struct ConflictRules
+{
+    double minGap = 2.5;        //< m, standstill gap
+    double headway = 1.0;       //< s, time gap of the follower
+    double lateralMargin = 0.3; //< m, additional lateral clearance
+};
+
+/**
+ * True if two bodies are too close: their lateral extents (along the heading of a)
+ * overlap and the longitudinal gap is below minGap + headway * speed of the follower.
+ * Headings are assumed to be nearly parallel (motorway traffic).
+ */
+bool conflicts(const Body& a, const Body& b, const ConflictRules&);
 
 /** conversions between message units and SI units */
 inline int32_t toTenthMicrodegree(double deg) { return static_cast<int32_t>(deg * 1e7 + (deg >= 0.0 ? 0.5 : -0.5)); }

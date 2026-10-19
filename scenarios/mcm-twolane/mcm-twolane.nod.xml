@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- straight two-lane motorway, 4 km, one on-ramp at 1 km
+     regenerate the network after editing: netconvert -c mcm-twolane.netccfg -->
+<nodes>
+    <node id="start" x="0" y="0"/>
+    <node id="mergeIn" x="1000" y="0"/>
+    <node id="mergeOut" x="1300" y="0"/>
+    <node id="end" x="4000" y="0"/>
+    <node id="rampStart" x="600" y="-60"/>
+</nodes>

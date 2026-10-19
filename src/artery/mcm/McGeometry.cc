@@ -1,5 +1,6 @@
 #include "artery/mcm/McGeometry.h"
 #include "artery/mcm/Mcm_m.h"
+#include <algorithm>
 #include <cmath>
 
 namespace artery
@@ -91,26 +92,57 @@ double headingOf(const McMessage& msg)
     return msg.getHeading() * 0.1;
 }
 
-double horizonOf(const McMessage& msg)
+McPoints referencePoints(const McMessage& msg)
 {
-    const unsigned n = msg.getPointsArraySize();
-    return n > 0 ? msg.getPoints(n - 1).timeOffset * 1e-3 : 0.0;
+    McPoints points(msg.getReferenceArraySize());
+    for (unsigned i = 0; i < points.size(); ++i) {
+        points[i] = msg.getReference(i);
+    }
+    return points;
 }
 
-TrajectorySample sampleTrajectory(const McMessage& msg, double t)
+McPoints requestedPoints(const McMessage& msg)
+{
+    McPoints points(msg.getRequestedArraySize());
+    for (unsigned i = 0; i < points.size(); ++i) {
+        points[i] = msg.getRequested(i);
+    }
+    return points;
+}
+
+void setReferencePoints(McMessage& msg, const McPoints& points)
+{
+    msg.setReferenceArraySize(points.size());
+    for (unsigned i = 0; i < points.size(); ++i) {
+        msg.setReference(i, points[i]);
+    }
+}
+
+void setRequestedPoints(McMessage& msg, const McPoints& points)
+{
+    msg.setRequestedArraySize(points.size());
+    for (unsigned i = 0; i < points.size(); ++i) {
+        msg.setRequested(i, points[i]);
+    }
+}
+
+double horizonOf(const McPoints& points)
+{
+    return points.empty() ? 0.0 : points.back().timeOffset * 1e-3;
+}
+
+TrajectorySample sampleTrajectory(const McPoints& points, double t)
 {
     TrajectorySample sample;
-    const unsigned n = msg.getPointsArraySize();
-    if (n == 0 || t < 0.0 || t > horizonOf(msg)) {
+    if (points.empty() || t < 0.0 || t > horizonOf(points)) {
         return sample;
     }
 
     // point 0 is the reference position at generation time
     double t0 = 0.0;
     Enu p0;
-    double v0 = msg.getPoints(0).speed * 0.01;
-    for (unsigned i = 0; i < n; ++i) {
-        const McTrajectoryPoint& point = msg.getPoints(i);
+    double v0 = points.front().speed * 0.01;
+    for (const McTrajectoryPoint& point : points) {
         const double t1 = point.timeOffset * 1e-3;
         const Enu p1 { point.deltaEast * 0.01, point.deltaNorth * 0.01 };
         const double v1 = point.speed * 0.01;
@@ -128,6 +160,41 @@ TrajectorySample sampleTrajectory(const McMessage& msg, double t)
         v0 = v1;
     }
     return sample;
+}
+
+TrajectorySample sampleExtrapolated(const McPoints& points, double t)
+{
+    const double horizon = horizonOf(points);
+    if (points.empty() || t <= horizon) {
+        return sampleTrajectory(points, std::max(0.0, t));
+    }
+    TrajectorySample sample = sampleTrajectory(points, horizon);
+    const McTrajectoryPoint& last = points.back();
+    sample.speed = last.speed * 0.01;
+    sample.position = sample.position + ((t - horizon) * sample.speed) * headingVector(sample.heading);
+    return sample;
+}
+
+bool conflicts(const Body& a, const Body& b, const ConflictRules& rules)
+{
+    const Enu forward = headingVector(a.heading);
+    const Enu left = leftVector(a.heading);
+    const Enu delta = b.front - a.front;
+    const double lateral = dot(delta, left);
+    if (std::abs(lateral) >= 0.5 * (a.width + b.width) + rules.lateralMargin) {
+        return false;
+    }
+
+    // longitudinal extents along the heading of a: a in [-length, 0], b in [front - length, front]
+    const double bFront = dot(delta, forward);
+    const double bRear = bFront - b.length;
+    if (bRear >= 0.0) {
+        return bRear < rules.minGap + rules.headway * a.speed; // b ahead, a follows
+    } else if (bFront <= -a.length) {
+        return -a.length - bFront < rules.minGap + rules.headway * b.speed; // b follows a
+    } else {
+        return true; // overlapping
+    }
 }
 
 } // namespace mcm

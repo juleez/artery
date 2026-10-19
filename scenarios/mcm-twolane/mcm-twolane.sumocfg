@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+    <input>
+        <net-file value="mcm-twolane.net.xml"/>
+        <route-files value="mcm-twolane.rou.xml"/>
+    </input>
+
+    <time>
+        <begin value="0"/>
+        <step-length value="0.1"/>
+    </time>
+
+    <processing>
+        <!-- sublane model: McService drives the lateral movement of a lane change itself
+             (S-shaped profile, duration drawn per lane change, abort at any time) -->
+        <lateral-resolution value="0.875"/>
+        <collision.action value="warn"/>
+    </processing>
+
+    <report>
+        <no-step-log value="true"/>
+    </report>
+</configuration>

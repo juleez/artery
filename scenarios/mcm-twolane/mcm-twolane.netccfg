@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- regenerate mcm-twolane.net.xml after editing the node/edge sources:
+     netconvert -c mcm-twolane.netccfg -->
+<configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
+    <input>
+        <node-files value="mcm-twolane.nod.xml"/>
+        <edge-files value="mcm-twolane.edg.xml"/>
+    </input>
+
+    <output>
+        <output-file value="mcm-twolane.net.xml"/>
+    </output>
+
+    <junctions>
+        <no-turnarounds value="true"/>
+    </junctions>
+
+    <projection>
+        <!-- geo-referencing is required for valid WGS84 positions in CAMs and MCMs;
+             the plain x/y are declared as tmerc easting/northing around lat_0/lon_0 -->
+        <proj value="+proj=tmerc +ellps=WGS84 +datum=WGS84 +lat_0=49 +lon_0=11 +units=m +no_defs"/>
+        <proj.inverse value="true"/>
+    </projection>
+</configuration>

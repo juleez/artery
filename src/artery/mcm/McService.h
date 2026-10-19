@@ -10,10 +10,10 @@ namespace artery
  * Honest maneuver coordination service.
  *
  * Besides driving what it announces, it produces the legitimate deviations of
- * thesis Section 5.3: with probability abortProbability an accepted lane change
- * is aborted, either with a cancellation MCM (variant A) or silently (variant B).
- * The abort happens at the announced start of the lateral movement, since SUMO
- * cannot reverse a continuous lane change once it has begun.
+ * thesis Section 5.3: with probability abortProbability a committed lane change
+ * is aborted at a random point of the lateral movement and the vehicle returns
+ * into its origin lane, either announcing the return with a new reference
+ * trajectory (variant A) or silently (variant B).
  */
 class McService : public BaseMcService
 {
@@ -23,7 +23,7 @@ protected:
 
 private:
     double mAbortProbability = 0.0;
-    bool mAbortWithCancel = true;
+    bool mAbortAnnounced = true;
 };
 
 } // namespace artery

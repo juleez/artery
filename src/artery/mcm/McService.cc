@@ -9,15 +9,22 @@ void McService::initialize()
 {
     BaseMcService::initialize();
     mAbortProbability = par("abortProbability");
-    mAbortWithCancel = par("abortWithCancel");
+    mAbortAnnounced = par("abortAnnounced");
 }
 
-BaseMcService::Execution McService::decideExecution(const Maneuver&)
+BaseMcService::Execution McService::decideExecution(const Maneuver& maneuver)
 {
+    Execution execution;
     if (mAbortProbability > 0.0 && uniform(0.0, 1.0) < mAbortProbability) {
-        return mAbortWithCancel ? Execution::AbortWithCancel : Execution::AbortSilent;
+        const double progress = par("abortProgress").doubleValue();
+        execution.announce = mAbortAnnounced;
+        if (progress <= 0.0) {
+            execution.drive = false;
+        } else {
+            execution.abortAfter = progress * maneuver.laneChangeDuration;
+        }
     }
-    return Execution::Drive;
+    return execution;
 }
 
 } // namespace artery

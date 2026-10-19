@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edges>
+    <!-- mainline: two lanes of 3.5 m, 120 km/h -->
+    <edge id="hw0" from="start" to="mergeIn" numLanes="2" speed="33.33" width="3.5" priority="3"/>
+    <!-- acceleration lane: a third lane on the right which ends at mergeOut, forcing a merge -->
+    <edge id="hwAcc" from="mergeIn" to="mergeOut" numLanes="3" speed="33.33" width="3.5" priority="3"/>
+    <edge id="hw1" from="mergeOut" to="end" numLanes="2" speed="33.33" width="3.5" priority="3"/>
+
+    <edge id="ramp" from="rampStart" to="mergeIn" numLanes="1" speed="22.22" width="3.5" priority="2"/>
+</edges>

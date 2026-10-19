@@ -4,26 +4,24 @@
      scale option for the other density levels.
      All vehicles are automated (SAE level 4, see thesis Section 4.1), hence sigma=0:
      no driver imperfection, the remaining deviation from an announced trajectory
-     comes from traffic and from the vehicle controller. -->
+     comes from traffic and from the vehicle controller.
+     maxSpeedLat and lcAccelLat only bound the lateral movement commanded by McService:
+     a quintic lane change over 3.5 m in 1 s needs 6.6 m/s and 20 m/s^2; SUMO only
+     follows such a profile exactly with lcAccelLat well above that. -->
 <routes>
     <vType id="car" vClass="passenger" length="5" width="1.8" minGap="2.5" maxSpeed="40"
            accel="2.6" decel="4.5" sigma="0" tau="1.0"
            speedFactor="normc(1,0.1,0.8,1.2)"
            lcStrategic="1" lcCooperative="1" lcSpeedGain="1" lcKeepRight="1"
+           latAlignment="center" maxSpeedLat="8" lcAccelLat="60"
            color="0,0.67,0"/>
-    <vType id="truck" vClass="trailer" length="16" width="2.5" minGap="3" maxSpeed="25"
-           accel="1.0" decel="4.0" sigma="0" tau="1.2"
-           speedFactor="normc(1,0.05,0.9,1.1)"
-           lcStrategic="1" lcCooperative="1" lcSpeedGain="0.5" lcKeepRight="1"
-           guiShape="truck" color="0.6,0.6,0.6"/>
-    <vTypeDistribution id="mixed" vTypes="car truck" probabilities="0.85 0.15"/>
 
     <route id="main" edges="hw0 hwAcc hw1"/>
     <route id="onRamp" edges="ramp hwAcc hw1"/>
 
     <!-- exponentially distributed headways (Poisson arrivals) -->
-    <flow id="mainFlow" type="mixed" route="main" begin="0" end="600"
+    <flow id="mainFlow" type="car" route="main" begin="0" end="600"
           period="exp(0.6667)" departLane="random" departSpeed="desired"/>
-    <flow id="rampFlow" type="mixed" route="onRamp" begin="0" end="600"
+    <flow id="rampFlow" type="car" route="onRamp" begin="0" end="600"
           period="exp(0.1111)" departLane="0" departSpeed="desired"/>
 </routes>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- radar sensors of the automated vehicles: vehicles without MCM (manual, trucks)
+     are taken into account in the conflict check of McService -->
+<sensors>
+    <sensor name="FrontLongRangeRadar" type="artery.envmod.sensor.FrontRadar" />
+    <sensor name="FrontShortRangeRadar" type="artery.envmod.sensor.FrontRadar" />
+    <sensor name="RearLongRangeRadar" type="artery.envmod.sensor.RearRadar" />
+    <sensor name="RearShortRangeRadar" type="artery.envmod.sensor.RearRadar" />
+</sensors>

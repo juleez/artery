@@ -1,5 +1,4 @@
 #include "artery/mcm/McTrajectoryPlanner.h"
-#include "artery/mcm/McGeometry.h"
 #include "artery/mcm/Mcm_m.h"
 #include <omnetpp.h>
 #include <algorithm>
@@ -11,33 +10,10 @@ namespace artery
 
 using libsumo::TraCIPosition;
 
-double McLongitudinalProfile::speed(double t) const
-{
-    const double ta = std::min(std::max(t, 0.0), accelDuration);
-    return std::max(0.0, v0 + accel * ta);
-}
-
-double McLongitudinalProfile::distance(double t) const
-{
-    double ta = std::min(std::max(t, 0.0), accelDuration);
-    if (accel < 0.0 && v0 + accel * ta < 0.0) {
-        ta = -v0 / accel; // standstill before end of acceleration phase
-    }
-    const double accelDistance = v0 * ta + 0.5 * accel * ta * ta;
-    return accelDistance + speed(t) * std::max(0.0, t - ta);
-}
-
-double McLateralProfile::offset(double t) const
-{
-    if (t <= start || duration <= 0.0) {
-        return t <= start ? d0 : d0 + delta;
-    }
-    const double f = std::min(1.0, (t - start) / duration);
-    return d0 + f * delta;
-}
-
 namespace
 {
+
+constexpr double pi = 3.14159265358979323846;
 
 TraCIPosition makePosition(double x, double y)
 {
@@ -86,6 +62,70 @@ void pointAt(const std::vector<TraCIPosition>& line, double s, TraCIPosition& po
 
 } // namespace
 
+double McLongitudinalProfile::speed(double t) const
+{
+    const double ta = std::min(std::max(t, 0.0), accelDuration);
+    return std::min(maxSpeed, std::max(0.0, v0 + accel * ta));
+}
+
+double McLongitudinalProfile::distance(double t) const
+{
+    t = std::max(t, 0.0);
+    double ta = std::min(t, accelDuration);
+    if (accel < 0.0 && v0 + accel * ta < 0.0) {
+        ta = -v0 / accel; // standstill before end of acceleration phase
+    } else if (accel > 0.0 && v0 + accel * ta > maxSpeed) {
+        ta = std::max(0.0, (maxSpeed - v0) / accel); // maximum speed reached earlier
+    }
+    const double accelDistance = v0 * ta + 0.5 * accel * ta * ta;
+    return accelDistance + speed(t) * std::max(0.0, t - ta);
+}
+
+double McLateralProfile::offset(double t) const
+{
+    if (t <= start || duration <= 0.0) {
+        return t <= start ? d0 : d0 + delta;
+    }
+    const double x = std::min(1.0, (t - start) / duration);
+    double f = x;
+    switch (shape) {
+        case Shape::Linear:
+            break;
+        case Shape::Sinusoidal:
+            // lateral speed 1 - cos: no jump in lateral speed and acceleration at start and end
+            f = x - std::sin(2.0 * pi * x) / (2.0 * pi);
+            break;
+        case Shape::Quintic:
+            // minimum jerk polynomial, common model of lane change trajectories
+            f = x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
+            break;
+    }
+    return d0 + f * delta;
+}
+
+McLateralProfile::Shape McLateralProfile::parseShape(const std::string& name)
+{
+    if (name == "linear") {
+        return Shape::Linear;
+    } else if (name == "sinusoidal") {
+        return Shape::Sinusoidal;
+    } else if (name == "quintic") {
+        return Shape::Quintic;
+    }
+    throw omnetpp::cRuntimeError("unknown lateral profile shape '%s' (linear, sinusoidal, quintic)", name.c_str());
+}
+
+TraCIPosition McPlan::at(double t, TraCIPosition* direction) const
+{
+    TraCIPosition onPath, tangent;
+    pointAt(path, s0 + lon.distance(t - t0), onPath, tangent);
+    const double d = lat.offset(t);
+    if (direction) {
+        *direction = tangent;
+    }
+    return makePosition(onPath.x - d * tangent.y, onPath.y + d * tangent.x);
+}
+
 McTrajectoryPlanner::McTrajectoryPlanner(traci::API& api, const std::string& id) :
     mApi(api), mVehicleId(id)
 {
@@ -128,6 +168,22 @@ bool McTrajectoryPlanner::laneEnds(const LaneState& state) const
         }
     }
     return false;
+}
+
+TraCIPosition McTrajectoryPlanner::vehiclePosition() const
+{
+    return mApi.vehicle.getPosition(mVehicleId);
+}
+
+double McTrajectoryPlanner::vehicleSpeed() const
+{
+    return mApi.vehicle.getSpeed(mVehicleId);
+}
+
+mcm::Geo McTrajectoryPlanner::vehicleGeo() const
+{
+    const auto geo = mApi.convertGeo(vehiclePosition());
+    return mcm::Geo { geo.latitude, geo.longitude };
 }
 
 const McTrajectoryPlanner::Polyline& McTrajectoryPlanner::laneShape(const std::string& laneId) const
@@ -181,24 +237,26 @@ McTrajectoryPlanner::Polyline McTrajectoryPlanner::buildPath(const LaneState& st
         }
     }
 
-    Polyline path;
     const Polyline& current = laneShape(state.laneId);
     const double shapeLength = polylineLength(current);
     const double sumoLength = laneLength(state.laneId);
     const double s0 = sumoLength > 0.0 ? state.lanePosition * shapeLength / sumoLength : state.lanePosition;
 
+    // start some metres behind the vehicle, so that positions slightly behind the
+    // anchor (e.g. after braking harder than planned) can still be projected
+    Polyline path;
     TraCIPosition point, tangent;
-    pointAt(current, s0, point, tangent);
+    pointAt(current, s0 - 20.0, point, tangent);
     path.push_back(point);
     double walked = 0.0;
     for (std::size_t i = 1; i < current.size(); ++i) {
         walked += distance(current[i - 1], current[i]);
-        if (walked > s0 + 1e-3) {
+        if (walked > s0 - 20.0 + 1e-3) {
             path.push_back(current[i]);
         }
     }
 
-    for (std::size_t l = 1; l < lanes.size() && polylineLength(path) < length; ++l) {
+    for (std::size_t l = 1; l < lanes.size() && polylineLength(path) < length + 20.0; ++l) {
         for (const TraCIPosition& p : laneShape(lanes[l])) {
             if (distance(path.back(), p) > 1e-2) {
                 path.push_back(p);
@@ -208,67 +266,140 @@ McTrajectoryPlanner::Polyline McTrajectoryPlanner::buildPath(const LaneState& st
 
     // route ends or no continuation known: extend straight along the last direction
     const double built = polylineLength(path);
-    if (built < length) {
+    if (built < length + 20.0) {
         TraCIPosition end, direction;
         pointAt(path.size() > 1 ? path : current, path.size() > 1 ? built : shapeLength, end, direction);
-        const double extra = length - built + 1.0;
+        const double extra = length + 20.0 - built + 1.0;
         path.push_back(makePosition(path.back().x + extra * direction.x, path.back().y + extra * direction.y));
     }
     return path;
 }
 
-void McTrajectoryPlanner::plan(McMessage& msg, const LaneState& state, const McLongitudinalProfile& lon,
-        const McLateralProfile& lat, unsigned numPoints, double spacing) const
+McPlan McTrajectoryPlanner::planLane(const LaneState& state, double now, double pathLength) const
 {
-    const double horizon = numPoints * spacing;
-    const Polyline path = buildPath(state, lon.distance(horizon) + 10.0);
-
-    // anchor the path at the actual vehicle position (front bumper as in the CAM)
-    const TraCIPosition vehicle = mApi.vehicle.getPosition(mVehicleId);
-    TraCIPosition foot, tangent;
-    pointAt(path, 0.0, foot, tangent);
-    const TraCIPosition anchor = makePosition(foot.x - lat.d0 * tangent.y, foot.y + lat.d0 * tangent.x);
-    const TraCIPosition correction = makePosition(vehicle.x - anchor.x, vehicle.y - anchor.y);
-    if (std::hypot(correction.x, correction.y) > 0.5) {
-        EV_STATICCONTEXT;
-        EV_WARN << "MCM trajectory anchor of " << mVehicleId << " is off by "
-            << std::hypot(correction.x, correction.y) << " m\n";
+    McPlan plan;
+    plan.path = buildPath(state, pathLength);
+    plan.arc.reserve(plan.path.size());
+    double total = 0.0;
+    for (std::size_t i = 0; i < plan.path.size(); ++i) {
+        total += i > 0 ? distance(plan.path[i - 1], plan.path[i]) : 0.0;
+        plan.arc.push_back(total);
     }
+    const Projection p = project(plan, vehiclePosition());
+    plan.s0 = p.s;
+    plan.t0 = now;
+    plan.lon.v0 = vehicleSpeed();
+    plan.lat.d0 = p.lateral;
+    plan.lat.start = now;
+    return plan;
+}
 
+void McTrajectoryPlanner::anchor(McPlan& plan, double now, double speed) const
+{
+    plan.s0 = project(plan, vehiclePosition()).s;
+    plan.t0 = now;
+    plan.lon.v0 = speed;
+}
+
+McTrajectoryPlanner::Projection McTrajectoryPlanner::project(const McPlan& plan, const TraCIPosition& p) const
+{
+    Projection best;
+    double closest = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 1; i < plan.path.size(); ++i) {
+        const TraCIPosition& a = plan.path[i - 1];
+        const TraCIPosition& b = plan.path[i];
+        const double segment = distance(a, b);
+        if (segment < 1e-9) {
+            continue;
+        }
+        const double dx = (b.x - a.x) / segment;
+        const double dy = (b.y - a.y) / segment;
+        double u = (p.x - a.x) * dx + (p.y - a.y) * dy;
+        // the first and last segment extend beyond the path
+        if (i > 1) {
+            u = std::max(u, 0.0);
+        }
+        if (i + 1 < plan.path.size()) {
+            u = std::min(u, segment);
+        }
+        const double fx = a.x + u * dx;
+        const double fy = a.y + u * dy;
+        const double gap = std::hypot(p.x - fx, p.y - fy);
+        if (gap < closest) {
+            closest = gap;
+            best.s = (i - 1 < plan.arc.size() ? plan.arc[i - 1] : 0.0) + u;
+            best.lateral = dx * (p.y - a.y) - dy * (p.x - a.x);
+        }
+    }
+    return best;
+}
+
+McTrajectoryPlanner::Frame McTrajectoryPlanner::frame() const
+{
     // linearised conversion of SUMO's planar coordinates into east/north offsets
-    using mcm::Geo;
-    using mcm::Enu;
     auto toGeo = [this](double x, double y) {
         const auto geo = mApi.convertGeo(makePosition(x, y));
-        return Geo { geo.latitude, geo.longitude };
+        return mcm::Geo { geo.latitude, geo.longitude };
     };
-    const Geo origin = toGeo(vehicle.x, vehicle.y);
-    const Enu unitX = 0.1 * mcm::toEnu(origin, toGeo(vehicle.x + 10.0, vehicle.y));
-    const Enu unitY = 0.1 * mcm::toEnu(origin, toGeo(vehicle.x, vehicle.y + 10.0));
+    Frame f;
+    f.origin = vehiclePosition();
+    const mcm::Geo origin = toGeo(f.origin.x, f.origin.y);
+    f.unitX = 0.1 * mcm::toEnu(origin, toGeo(f.origin.x + 10.0, f.origin.y));
+    f.unitY = 0.1 * mcm::toEnu(origin, toGeo(f.origin.x, f.origin.y + 10.0));
+    return f;
+}
 
-    msg.setPointsArraySize(numPoints);
-    Enu previous;
-    const double fallbackHeading = mcm::headingOf(msg);
+mcm::McPoints McTrajectoryPlanner::sample(const McPlan& plan, double now, unsigned numPoints, double spacing) const
+{
+    const Frame f = frame();
+    mcm::McPoints points(numPoints);
+    mcm::Enu previous;
+    double previousHeading = 0.0;
     for (unsigned i = 0; i < numPoints; ++i) {
-        const double t = (i + 1) * spacing;
-        TraCIPosition onPath, dir;
-        pointAt(path, lon.distance(t), onPath, dir);
-        const double d = lat.offset(t);
-        const double x = onPath.x - d * dir.y + correction.x - vehicle.x;
-        const double y = onPath.y + d * dir.x + correction.y - vehicle.y;
-        const Enu enu = x * unitX + y * unitY;
+        const double t = now + (i + 1) * spacing;
+        const TraCIPosition p = plan.at(t);
+        const mcm::Enu enu = (p.x - f.origin.x) * f.unitX + (p.y - f.origin.y) * f.unitY;
 
-        McTrajectoryPoint point;
-        point.timeOffset = static_cast<uint16_t>(std::lround(t * 1000.0));
+        McTrajectoryPoint& point = points[i];
+        point.timeOffset = static_cast<uint16_t>(std::lround((i + 1) * spacing * 1000.0));
         point.deltaEast = static_cast<int32_t>(std::lround(enu.east * 100.0));
         point.deltaNorth = static_cast<int32_t>(std::lround(enu.north * 100.0));
-        point.speed = static_cast<uint16_t>(std::lround(lon.speed(t) * 100.0));
-        const Enu secant = enu - previous;
-        const double heading = mcm::length(secant) > 1e-3 ? mcm::headingOf(secant) : fallbackHeading;
+        point.speed = static_cast<uint16_t>(std::lround(plan.lon.speed(t - plan.t0) * 100.0));
+        const mcm::Enu secant = enu - previous;
+        const double heading = mcm::length(secant) > 1e-3 ? mcm::headingOf(secant) : previousHeading;
         point.heading = static_cast<uint16_t>(std::lround(heading * 10.0)) % 3600;
-        msg.setPoints(i, point);
         previous = enu;
+        previousHeading = heading;
     }
+    return points;
+}
+
+std::vector<mcm::Body> McTrajectoryPlanner::footprints(const McPlan& plan, const std::vector<double>& times,
+        double length, double width) const
+{
+    const Frame f = frame();
+    auto toEnu = [&f](const TraCIPosition& p) {
+        return (p.x - f.origin.x) * f.unitX + (p.y - f.origin.y) * f.unitY;
+    };
+
+    std::vector<mcm::Body> bodies;
+    bodies.reserve(times.size());
+    for (double t : times) {
+        mcm::Body body;
+        body.front = toEnu(plan.at(t));
+        // direction of travel including the lateral movement
+        const mcm::Enu ahead = toEnu(plan.at(t + 0.1));
+        const mcm::Enu secant = ahead - body.front;
+        TraCIPosition tangent;
+        plan.at(t, &tangent);
+        body.heading = mcm::length(secant) > 1e-3 ? mcm::headingOf(secant) :
+            mcm::headingOf(tangent.x * f.unitX + tangent.y * f.unitY);
+        body.speed = plan.lon.speed(t - plan.t0);
+        body.length = length;
+        body.width = width;
+        bodies.push_back(body);
+    }
+    return bodies;
 }
 
 } // namespace artery

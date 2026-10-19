@@ -3,9 +3,10 @@
 Compare announced MCM trajectories with the driven trajectories (SUMO FCD).
 
 This is the noise floor of thesis Section 6.3 at full time resolution: for every
-FCD sample of a vehicle, the trajectory of the latest MCM which that vehicle had
-transmitted (and not cancelled) is interpolated at the sample time, and the error
-is split along (e_lon) and across (e_lat) the announced trajectory.
+FCD sample of a vehicle, the reference trajectory of the latest MCM which that
+vehicle had transmitted is interpolated at the sample time, and the error is split
+along (e_lon) and across (e_lat) the announced trajectory. Samples beyond the
+horizon of the latest MCM (e.g. after a silent abort) are skipped.
 
 usage: announcement_error.py <results dir> <run prefix, e.g. ground-truth-0>
 """
@@ -92,9 +93,9 @@ def main(results, run):
             if i < 0:
                 continue
             m = tx[station][i]
-            if m['cancel'] == '1' or not m['points']:
+            if not m['reference']:
                 continue
-            points = parse_points(m['points'])
+            points = parse_points(m['reference'])
             dt = t - m['gen']
             p, heading = sample(points, dt)
             if p is None:
@@ -105,7 +106,8 @@ def main(results, run):
             h = math.radians(heading)
             e_lon = de * math.sin(h) + dn * math.cos(h)
             e_lat = -de * math.cos(h) + dn * math.sin(h)
-            kind = {'0': 'intent', '1': 'lane change', '2': 'accept', '3': 'lane change'}[m['phase']]
+            kind = {'0': 'keep lane', '1': 'lane change', '2': 'lane change', '3': 'lane change',
+                    '4': 'yield'}[m['reference_type']]
             errors[kind][0].append(abs(e_lat))
             errors[kind][1].append(abs(e_lon))
             errors['all'][0].append(abs(e_lat))
