@@ -302,7 +302,7 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
     const double width = 0.5 * (mPlanner->laneWidth(lane.laneId) + mPlanner->laneWidth(target));
     const double horizon = mNumPoints * mPointSpacing;
     const double speed = mPlanner->vehicleSpeed();
-    const double allowed = mVehicleController->getTraCI()->vehicle.getAllowedSpeed(vehicleId());
+    const double allowed = accelerationLimit();
     // drawn per manoeuvre, it has to fit into the trajectory horizon together with the lead time
     const double drawn = par("laneChangeDuration").doubleValue();
 
@@ -388,8 +388,19 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
             }
         }
 
+        // the alternative of the lane change is lane keeping with the same speed change: only conflicts
+        // of the lateral movement count, followers in the own lane adapt to a deceleration as to any braking
+        McPlan keepAdapted = keep;
+        keepAdapted.lon = m.plan.lon;
+        if (c.accel > 0.0) {
+            // accelerating must not run into vehicles ahead in the own lane
+            bool aheadUnknown = false;
+            if (!conflictsOf(keepAdapted, keep, now, now, aheadUnknown).empty() || aheadUnknown) {
+                continue;
+            }
+        }
         bool blockedByUnknown = false;
-        m.affected = conflictsOf(m.plan, keep, now, now, blockedByUnknown);
+        m.affected = conflictsOf(m.plan, keepAdapted, now, now, blockedByUnknown);
         m.affectedUnknown = blockedByUnknown;
         m.lastConflicts = m.affected;
         m.lastUnknown = blockedByUnknown;
@@ -440,7 +451,7 @@ void BaseMcService::updateRequest(const SimTime& now)
     }
 
     bool blockedByUnknown = false;
-    const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown);
     mManeuver.lastConflicts = conflicts;
     mManeuver.lastUnknown = blockedByUnknown;
     bool granted = conflicts.empty() && !blockedByUnknown;
@@ -493,7 +504,7 @@ void BaseMcService::updateCommitted(const SimTime& now)
 
     // last check before the lateral movement, as with the on-board sensors in TR 103 578 clause 5.2.3
     bool blockedByUnknown = false;
-    const auto conflicts = conflictsOf(mManeuver.plan, keepLanePlan(now), now, mManeuver.announced, blockedByUnknown);
+    const auto conflicts = conflictsOf(mManeuver.plan, maneuverKeepPlan(now), now, mManeuver.announced, blockedByUnknown);
     mManeuver.lastConflicts = conflicts;
     mManeuver.lastUnknown = blockedByUnknown;
     if (!conflicts.empty() || blockedByUnknown) {
@@ -687,7 +698,7 @@ bool BaseMcService::findYieldPlan(const Neighbour& n, const SimTime& now, Yield&
     const double requesterSpeed = requested.back().speed * 0.01;
     const double horizon = mNumPoints * mPointSpacing;
     const McPlan base = keepLanePlan(now);
-    const double allowed = mVehicleController->getTraCI()->vehicle.getAllowedSpeed(vehicleId());
+    const double allowed = accelerationLimit();
 
     // candidates in order of increasing effort: first the smallest change of speed,
     // then the smallest acceleration
@@ -1191,6 +1202,24 @@ McLongitudinalProfile BaseMcService::maneuverLongitudinal(double speed) const
         lon.maxSpeed = lon.accel > 0.0 ? mManeuver.targetSpeed : 1e9;
     }
     return lon;
+}
+
+McPlan BaseMcService::maneuverKeepPlan(const SimTime& now) const
+{
+    McPlan plan = keepLanePlan(now);
+    plan.lon = maneuverLongitudinal(plan.lon.v0);
+    return plan;
+}
+
+double BaseMcService::accelerationLimit() const
+{
+    // getAllowedSpeed includes the speed factor, i.e. it is the desired speed of the vehicle;
+    // a manoeuvre may briefly exceed it up to the speed limit of the lane
+    auto& traci = *mVehicleController->getTraCI();
+    const double desired = traci.vehicle.getAllowedSpeed(vehicleId());
+    const double limit = std::min(traci.lane.getMaxSpeed(traci.vehicle.getLaneID(vehicleId())),
+            traci.vehicle.getMaxSpeed(vehicleId()));
+    return std::max(desired, limit);
 }
 
 void BaseMcService::controlLongitudinal(const SimTime&)

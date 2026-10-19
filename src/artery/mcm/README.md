@@ -74,8 +74,10 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
 
 1. **Wunsch übernehmen.** Kommt der Wunsch aus einer endenden Spur und ist strategisch, wird er zum Typ `MERGE`.
 2. **Lückenwahl** (`startManeuver`). Kandidaten sind Kombinationen aus:
-   - Geschwindigkeitsänderung in Schritten von `requesterSpeedStep` (2 m/s) bis `maxRequesterSpeedChange` (±4 m/s), mit `requesterDeceleration` (1,5 m/s²) bzw. `requesterAcceleration` (1 m/s²), nach oben begrenzt durch die erlaubte Geschwindigkeit;
+   - Geschwindigkeitsänderung in Schritten von `requesterSpeedStep` (2 m/s) bis `maxRequesterSpeedChange` (±4 m/s), mit `requesterDeceleration` (1,5 m/s²) bzw. `requesterAcceleration` (1 m/s²). Nach oben begrenzt ist sie durch das Tempolimit der Spur, mindestens aber durch die eigene Wunschgeschwindigkeit (`accelerationLimit`). Ein Fahrzeug darf seine Wunschgeschwindigkeit für ein Manöver also kurz überschreiten;
    - Vorlaufzeit `leadTime` (1 s) plus 0, 1 oder 2 s (`maxExtraLeadTime`), solange Vorlauf und gezogene Spurwechseldauer in den 8-s-Horizont passen.
+
+   Verglichen wird jeder Kandidat mit „Spur halten mit derselben Geschwindigkeitsänderung“. Es zählen also nur Konflikte, die die Querbewegung verursacht; ein Folgefahrzeug in der eigenen Spur passt sich einer Verzögerung an wie jedem anderen Bremsen. Ein beschleunigender Kandidat darf dagegen in der eigenen Spur mit niemandem vor ihm in Konflikt geraten.
 
    Die Kandidaten werden nach Aufwand sortiert: ein Geschwindigkeitsschritt zählt wie 1 s zusätzlicher Vorlauf, bei Gleichstand kommt Bremsen vor Beschleunigen. Bei einem Merge muss die Spurgrenze vor dem Ende der Einfädelspur überquert werden, sonst fällt der Kandidat weg (außer der Grundplan ohne Änderung).
    - Der erste **konfliktfreie** Kandidat wird ohne Verhandlung sofort zur Referenztrajektorie (`Committed`).
@@ -96,7 +98,7 @@ Dabei gilt `minInterval` (0,1 s) als Mindestabstand. Bei einem stillen Abbruch s
 2. **Ablehnen,** wenn das Fahrzeug nicht `Idle` ist (eigenes Manöver oder schon am Nachgeben) → `busy`.
 3. **Yield-Plan suchen** (`findYieldPlan`): Die Kandidaten sind nach steigendem Aufwand geordnet:
    - zuerst der kleinste Geschwindigkeitsverlust gegenüber der Geschwindigkeit des Requesters, in Schritten von 1 m/s bis `maxYieldSpeedLoss` (5 m/s);
-   - innerhalb davon die kleinste Verzögerung (0,5 bis 3 m/s²) oder Beschleunigung (0,5 bis 1 m/s², `maxYieldAcceleration`).
+   - innerhalb davon die kleinste Verzögerung (0,5 bis 3 m/s²) oder Beschleunigung (0,5 bis 1 m/s², `maxYieldAcceleration`, bis höchstens `accelerationLimit`).
 
    Ein beschleunigender Plan darf außer mit dem Requester mit niemandem in Konflikt geraten, z. B. nicht mit dem eigenen Vorderfahrzeug (`freeAhead`). Gibt es keinen passenden Plan → `cost`.
 4. **Hysterese:** Der Yielder prüft „betroffen“ und den Yield-Plan mit **strengeren** Regeln als der Requester: +`yieldMarginGap` (2 m) und +`yieldMarginHeadway` (0,5 s). Grund: Beide kennen sich nur aus der letzten MCM (Alter, Stützpunkte im Abstand von 250 ms, gerundete Positionen). Ohne Reserve hatte der Yielder die kleinste gerade ausreichende Verzögerung gewählt, und die Prüfung des Requesters ist trotzdem gescheitert. Vorher führte keine Zusage zu einem Spurwechsel, danach rund ein Drittel; die übrigen scheitern an anderen Partnern oder an Fahrzeugen ohne MCM.
@@ -197,7 +199,10 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 - **Realistische Spurwechsel:** 3–6 s, quintisch, 8 s Horizont, laufende Konfliktprüfung bis zur Spurgrenze, jederzeit abbrechbar.
 - **Keine Kategorie „noncoop“ mehr:** Entweder kooperierender Teilnehmer oder ganz ohne V2X. Der frühere Anteil von noncoop ist in `mcm-twolane` an coop gegangen.
 - **Hysterese beim Yielder:** Implizite Zusagen kommen jetzt an (siehe Abschnitt 7).
-- **Lückenwahl beim Requester und leichtes Beschleunigen beim Yielder:** Das löst Fälle, in denen der Partner vor dem Requester fährt und Bremsen nicht hilft. Noch nicht in der VM getestet.
+- **Lückenwahl beim Requester und leichtes Beschleunigen beim Yielder:** Das löst Fälle, in denen der Partner vor dem Requester fährt und Bremsen nicht hilft. Im ersten Lauf führten deutlich mehr Zusagen zu einem Spurwechsel (rund 19 `partner_done` gegenüber 14 `partner_released`), und es gab Spurwechsel ohne Verhandlung dank Geschwindigkeitsänderung.
+- **Korrekturen nach dem ersten Lauf der Lückenwahl:**
+  - Die Geschwindigkeitsgrenze war `getAllowedSpeed`. Weil das den Geschwindigkeitsfaktor enthält, ist es die Wunschgeschwindigkeit, und ein Yielder konnte praktisch nie beschleunigen. Jetzt gilt das Tempolimit der Spur.
+  - Ein verzögernder Kandidat galt als Konflikt mit dem eigenen Folgefahrzeug. Jetzt wird mit „Spur halten mit derselben Geschwindigkeitsänderung“ verglichen, auch bei den Prüfungen während der Anfrage und vor dem Start.
 
 ## 16. Bekannte Grenzen und offene Punkte
 
@@ -206,4 +211,5 @@ Die Konfigurationen in beiden Szenarien sind `General`, `sumo-gui`, `ground-trut
 - **Keine Dringlichkeit beim Einfädeln:** Für Merges gelten dieselben Grenzen beim Nachgeben und derselbe Takt der Versuche wie bei freiwilligen Spurwechseln. Idee: die Grenzen nach der Restlänge der Einfädelspur skalieren und den Takt verkürzen.
 - **`partner_done` ist zu optimistisch:** Der Yielder meldet es schon, wenn der Requester das Manöver zusagt, auch wenn der Spurwechsel danach mit `failed_gap` scheitert. Sauberer wäre ein eigenes `partner_failed`.
 - **Ein Partner pro Anfrage, eine Bewertung:** Eine einmal abgelehnte Anfrage (dieselbe ID) wird nicht neu bewertet. Der Requester fragt nach Timeout und Pause mit neuer ID an.
+- **Geschwindigkeitsverlust beim Yielder:** Er ist nur relativ zur Geschwindigkeit des Requesters begrenzt. Ein schneller Yielder kann deshalb stark abbremsen, z. B. von 150 auf 85 km/h für einen Lkw-Überholer. Eine zusätzliche Grenze relativ zur eigenen Geschwindigkeit wäre denkbar.
 - **Geschwindigkeit bei einer Anfrage:** Eine Geschwindigkeitsänderung aus der Lückenwahl läuft schon während der Anfrage. Bei einem Timeout gibt der Service die Geschwindigkeit wieder frei, das kann kleine Geschwindigkeitsschwankungen erzeugen.

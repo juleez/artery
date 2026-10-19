@@ -189,6 +189,10 @@ private:
     void controlLateral(const omnetpp::SimTime& now);
     /** remaining speed change of the own manoeuvre, starting at the given speed */
     McLongitudinalProfile maneuverLongitudinal(double speed) const;
+    /** lane keeping with the remaining speed change of the own manoeuvre: alternative of the lane change */
+    McPlan maneuverKeepPlan(const omnetpp::SimTime& now) const;
+    /** highest speed a manoeuvre may accelerate to: lane speed limit, at least the own desired speed */
+    double accelerationLimit() const;
     void controlLongitudinal(const omnetpp::SimTime& now);
     void holdSpeed(double speed);
     void releaseSpeed();
