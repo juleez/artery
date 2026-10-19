@@ -37,6 +37,9 @@ class VehicleDataProvider;
  *   with explicitResponses the extension of the TR adds ACK/NACK per requested trajectory.
  *   A yielder judges requests with a margin on gap and headway (yieldMargin*), so that
  *   its adapted plan also passes the requester's check (hysteresis)
+ * - gap selection: before a lane change is announced, the requester tries speed changes
+ *   and longer lead times; the first plan free of conflicts is driven without negotiation,
+ *   otherwise the plan with the fewest conflicts becomes the requested trajectory
  * - the request is withdrawn when it has not been granted within requestTimeout
  *
  * Lane changes are not decided by SUMO itself: autonomous lane changes are switched
@@ -78,6 +81,10 @@ protected:
         double originOffset = 0.0;          //< lateral offset from the origin lane centre at the start
         double laneWidth = 0.0;             //< m, distance between origin and target lane centre
         double laneChangeDuration = 0.0;    //< s
+        // speed change of the gap selection, driven from the announcement on (0: constant speed)
+        double startSpeed = 0.0;            //< m/s when the manoeuvre was announced
+        double targetSpeed = 0.0;           //< m/s
+        double speedAccel = 0.0;            //< m/s^2, negative for deceleration
         McPlan plan;                        //< lane change plan along the origin lane
         omnetpp::SimTime announced;         //< first MCM with this manoeuvre
         omnetpp::SimTime committed;         //< request granted or no negotiation needed
@@ -152,6 +159,8 @@ private:
 
     // partner role
     void handleRequest(const Neighbour&, const omnetpp::SimTime& now);
+    /** an accelerating yield plan conflicts with nobody but the requester */
+    bool freeAhead(const Neighbour& requester, const McPlan& trial, const omnetpp::SimTime& now) const;
     void updateYield(const omnetpp::SimTime& now);
     void releaseYield(const char* outcome, const omnetpp::SimTime& now);
     void respond(uint32_t requester, uint16_t requestId, bool accept, McResponseReason, const omnetpp::SimTime& now);
@@ -178,6 +187,9 @@ private:
     std::unique_ptr<McMessage> createMessage(const omnetpp::SimTime& now);
     void sendMcm(McMessage&);
     void controlLateral(const omnetpp::SimTime& now);
+    /** remaining speed change of the own manoeuvre, starting at the given speed */
+    McLongitudinalProfile maneuverLongitudinal(double speed) const;
+    void controlLongitudinal(const omnetpp::SimTime& now);
     void holdSpeed(double speed);
     void releaseSpeed();
 
@@ -238,6 +250,11 @@ private:
     double mLateralLookahead;
     double mLateralTolerance;
     omnetpp::SimTime mBlockedTimeout;
+    double mRequesterAcceleration;
+    double mRequesterDeceleration;
+    double mMaxRequesterSpeedChange;
+    double mRequesterSpeedStep;
+    double mMaxExtraLeadTime;
     int mWishReasons;
     bool mExplicitResponses;
     omnetpp::SimTime mResponseLifetime;

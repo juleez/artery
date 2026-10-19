@@ -170,6 +170,11 @@ bool McTrajectoryPlanner::laneEnds(const LaneState& state) const
     return false;
 }
 
+double McTrajectoryPlanner::remainingLength(const LaneState& state) const
+{
+    return std::max(0.0, laneLength(state.laneId) - state.lanePosition);
+}
+
 TraCIPosition McTrajectoryPlanner::vehiclePosition() const
 {
     return mApi.vehicle.getPosition(mVehicleId);

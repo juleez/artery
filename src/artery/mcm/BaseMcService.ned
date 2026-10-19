@@ -40,6 +40,14 @@ simple BaseMcService like ItsG5Service
         double lateralTolerance @unit(m) = default(0.5m);       // lag behind the plan regarded as blocked
         double blockedTimeout @unit(s) = default(0.3s);
         double requestTimeout @unit(s) = default(0.5s);         // must not exceed leadTime
+        // gap selection: speed changes in steps of requesterSpeedStep up to maxRequesterSpeedChange
+        // and lead times up to leadTime + maxExtraLeadTime are tried before a lane change is announced;
+        // a step of the speed change weighs like one second of additional lead time
+        double requesterAcceleration @unit(mpss) = default(1mpss);  // 0: no acceleration
+        double requesterDeceleration @unit(mpss) = default(1.5mpss); // 0: no deceleration
+        double maxRequesterSpeedChange @unit(mps) = default(4mps);
+        double requesterSpeedStep @unit(mps) = default(2mps);
+        double maxExtraLeadTime @unit(s) = default(2s);         // in steps of 1 s
         double requestRepeatInterval @unit(s) = default(0.1s);
         double maneuverCooldown @unit(s) = default(2.0s);       // minimum time between two own manoeuvres
         double wishPersistence @unit(s) = default(0.5s);        // a lane change wish of SUMO has to last this long
@@ -66,7 +74,7 @@ simple BaseMcService like ItsG5Service
         double yieldMarginHeadway @unit(s) = default(0.5s);
         // limits of a yielding vehicle
         double maxYieldDeceleration @unit(mpss) = default(3mpss);
-        double maxYieldAcceleration @unit(mpss) = default(0mpss);   // 0: yielding only by braking
+        double maxYieldAcceleration @unit(mpss) = default(1mpss);   // 0: yielding only by braking
         double maxYieldSpeedLoss @unit(mps) = default(5mps);       // below the speed of the requester
 
         // vehicles without MCM are taken from the own sensors if the node is an artery.envmod.Car

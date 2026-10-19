@@ -13,8 +13,9 @@ namespace artery
 /**
  * Longitudinal part of a plan: constant acceleration for a while, constant
  * speed afterwards. Times are relative to the anchor time of the plan.
- * Lane keeping and lane changes are planned at constant speed (thesis Section 5.2);
- * a yielding vehicle plans its deceleration.
+ * Lane keeping is planned at constant speed (thesis Section 5.2); a lane change may
+ * include a speed change chosen by the gap selection, a yielding vehicle plans its
+ * deceleration or acceleration.
  */
 struct McLongitudinalProfile
 {
@@ -104,6 +105,8 @@ public:
     std::string neighbourLane(const LaneState&, int direction) const;
     /** true if the current lane does not allow to continue the route (e.g. acceleration lane) */
     bool laneEnds(const LaneState&) const;
+    /** distance from the vehicle to the end of its current lane */
+    double remainingLength(const LaneState&) const;
 
     libsumo::TraCIPosition vehiclePosition() const;
     double vehicleSpeed() const;

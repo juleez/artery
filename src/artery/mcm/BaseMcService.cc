@@ -106,6 +106,11 @@ void BaseMcService::initialize()
     mLateralLookahead = par("lateralLookahead");
     mLateralTolerance = par("lateralTolerance");
     mBlockedTimeout = par("blockedTimeout");
+    mRequesterAcceleration = par("requesterAcceleration");
+    mRequesterDeceleration = par("requesterDeceleration");
+    mMaxRequesterSpeedChange = par("maxRequesterSpeedChange");
+    mRequesterSpeedStep = par("requesterSpeedStep");
+    mMaxExtraLeadTime = par("maxExtraLeadTime");
     mWishReasons = par("wishReasons");
     mExplicitResponses = par("explicitResponses");
     mResponseLifetime = par("responseLifetime");
@@ -234,6 +239,9 @@ void BaseMcService::trigger()
             updateYield(now);
             break;
     }
+    if (mManeuver.id != 0 && mState != State::Idle && mState != State::Yielding) {
+        controlLongitudinal(now);
+    }
 
     transmit(now);
 }
@@ -293,38 +301,127 @@ void BaseMcService::startManeuver(int direction, McManeuverType type, const SimT
     }
     const double width = 0.5 * (mPlanner->laneWidth(lane.laneId) + mPlanner->laneWidth(target));
     const double horizon = mNumPoints * mPointSpacing;
-
-    Maneuver m;
-    m.id = nextTrajectoryId();
-    m.type = type;
-    m.direction = direction;
-    // drawn per manoeuvre, it has to fit into the trajectory horizon together with the lead time
-    m.laneChangeDuration = std::min(par("laneChangeDuration").doubleValue(), horizon - mLeadTime.dbl());
-
     const double speed = mPlanner->vehicleSpeed();
-    // the path has to cover the manoeuvre and the horizon of the last announcement during it
-    const double pathLength = std::max(speed, 10.0) * (mLeadTime.dbl() + m.laneChangeDuration + horizon) + 50.0;
-    m.plan = mPlanner->planLane(lane, now.dbl(), pathLength);
-    m.plan.type = type;
-    m.originOffset = m.plan.lat.d0;
-    m.laneWidth = width;
-    m.plan.lat.delta = direction * width - m.plan.lat.d0;
-    m.plan.lat.start = (now + mLeadTime).dbl();
-    m.plan.lat.duration = m.laneChangeDuration;
-    m.plan.lat.shape = mLateralShape;
-    m.announced = now;
+    const double allowed = mVehicleController->getTraCI()->vehicle.getAllowedSpeed(vehicleId());
+    // drawn per manoeuvre, it has to fit into the trajectory horizon together with the lead time
+    const double drawn = par("laneChangeDuration").doubleValue();
 
-    bool blockedByUnknown = false;
-    m.affected = conflictsOf(m.plan, keepLanePlan(now), now, now, blockedByUnknown);
-    m.affectedUnknown = blockedByUnknown;
-    m.lastConflicts = m.affected;
-    m.lastUnknown = blockedByUnknown;
-    mManeuver = std::move(m);
+    // gap selection: candidate plans with a speed change and/or a longer lead time,
+    // ordered by their effort (a speed step weighs like one second of additional lead time)
+    struct Candidate
+    {
+        double lead = 0.0;
+        double targetSpeed = 0.0;
+        double accel = 0.0;
+        double cost = 0.0;
+    };
+    std::vector<Candidate> candidates;
+    const int steps = mRequesterSpeedStep > 0.0 ? static_cast<int>(std::floor(mMaxRequesterSpeedChange / mRequesterSpeedStep + 1e-6)) : 0;
+    for (double extra = 0.0; extra <= mMaxExtraLeadTime + 1e-6; extra += 1.0) {
+        const double lead = mLeadTime.dbl() + extra;
+        if (extra > 0.0 && lead + drawn > horizon) {
+            break; // a longer lead time must not shorten the drawn lane change
+        }
+        for (int k = -steps; k <= steps; ++k) {
+            Candidate c;
+            c.lead = lead;
+            c.targetSpeed = speed;
+            if (k > 0) {
+                c.targetSpeed = std::min(allowed, speed + k * mRequesterSpeedStep);
+                c.accel = mRequesterAcceleration;
+                if (c.accel <= 0.0 || c.targetSpeed - speed < 0.5 * k * mRequesterSpeedStep) {
+                    continue; // not possible or already limited by the previous step
+                }
+            } else if (k < 0) {
+                c.targetSpeed = std::max(0.0, speed + k * mRequesterSpeedStep);
+                c.accel = -mRequesterDeceleration;
+                if (-c.accel <= 0.0 || speed - c.targetSpeed < -0.5 * k * mRequesterSpeedStep) {
+                    continue;
+                }
+            }
+            // ties: decelerating before accelerating
+            c.cost = std::abs(k) + extra + (k > 0 ? 0.1 : 0.0);
+            candidates.push_back(c);
+        }
+    }
+    std::stable_sort(candidates.begin(), candidates.end(),
+        [](const Candidate& a, const Candidate& b) { return a.cost < b.cost; });
 
-    // the announced constant speed is held until the lane change is completed (thesis Section 5.2)
-    holdSpeed(speed);
+    // one path for all candidates, long enough for the fastest one
+    const double fastest = std::max(speed, std::min(allowed, speed + mMaxRequesterSpeedChange));
+    const double pathLength = std::max(fastest, 10.0) * (mLeadTime.dbl() + mMaxExtraLeadTime + drawn + horizon) + 50.0;
+    const McPlan base = mPlanner->planLane(lane, now.dbl(), pathLength);
+    const McPlan keep = keepLanePlan(now);
+    // a merge has to cross the lane boundary before the acceleration lane ends
+    const double remaining = type == MC_MERGE ? mPlanner->remainingLength(lane) : -1.0;
 
-    if (mManeuver.affected.empty() && !blockedByUnknown) {
+    Maneuver best;
+    bool found = false;
+    std::size_t bestRank = 0;
+    for (const Candidate& c : candidates) {
+        Maneuver m;
+        m.type = type;
+        m.direction = direction;
+        m.laneChangeDuration = std::min(drawn, horizon - c.lead);
+        m.plan = base;
+        m.plan.type = type;
+        m.originOffset = m.plan.lat.d0;
+        m.laneWidth = width;
+        m.plan.lat.delta = direction * width - m.plan.lat.d0;
+        m.plan.lat.start = now.dbl() + c.lead;
+        m.plan.lat.duration = m.laneChangeDuration;
+        m.plan.lat.shape = mLateralShape;
+        m.startSpeed = speed;
+        m.targetSpeed = c.targetSpeed;
+        m.speedAccel = c.accel;
+        m.plan.lon.v0 = speed;
+        if (c.accel != 0.0) {
+            m.plan.lon.accel = c.accel;
+            m.plan.lon.accelDuration = std::abs(c.targetSpeed - speed) / std::abs(c.accel);
+            m.plan.lon.maxSpeed = c.accel > 0.0 ? c.targetSpeed : 1e9;
+        }
+        const bool basic = c.lead == mLeadTime.dbl() && c.accel == 0.0;
+        if (remaining >= 0.0 && !basic) {
+            const double crossing = m.plan.lon.distance(c.lead + 0.5 * m.laneChangeDuration);
+            if (crossing > remaining - mConflictRules.minGap) {
+                continue;
+            }
+        }
+
+        bool blockedByUnknown = false;
+        m.affected = conflictsOf(m.plan, keep, now, now, blockedByUnknown);
+        m.affectedUnknown = blockedByUnknown;
+        m.lastConflicts = m.affected;
+        m.lastUnknown = blockedByUnknown;
+        if (m.affected.empty() && !blockedByUnknown) {
+            best = std::move(m);
+            found = true;
+            break;
+        }
+        // no free plan: request the one which needs the least cooperation; vehicles without
+        // MCM cannot cooperate, then the number of vehicles asked counts (the effort breaks ties)
+        const std::size_t rank = (blockedByUnknown ? 1000 : 0) + m.affected.size();
+        if (!found && (best.plan.empty() || rank < bestRank)) {
+            best = std::move(m);
+            bestRank = rank;
+        }
+    }
+    if (best.plan.empty()) {
+        return; // only merges can run out of candidates, tried again with the next wish
+    }
+
+    best.id = nextTrajectoryId();
+    best.announced = now;
+    mManeuver = std::move(best);
+
+    // the vehicle drives the announced speed until the lane change is completed (thesis Section 5.2)
+    if (mManeuver.speedAccel == 0.0) {
+        holdSpeed(speed);
+    } else {
+        controlLongitudinal(now);
+    }
+
+    if (found) {
         // free of conflicts: no cooperation needed, the lane change becomes the reference trajectory
         commit(now);
     } else {
@@ -469,6 +566,13 @@ void BaseMcService::beginReturn(const char* reason, bool announce, const SimTime
     McLateralProfile back = returnProfile(now);
     back.duration = std::max(0.5, par("returnDuration").doubleValue());
     mManeuver.plan.lat = back;
+    // the return is driven at the current speed
+    const double speed = mPlanner->vehicleSpeed();
+    mManeuver.speedAccel = 0.0;
+    mManeuver.targetSpeed = speed;
+    mPlanner->anchor(mManeuver.plan, now.dbl(), speed);
+    mManeuver.plan.lon = maneuverLongitudinal(speed);
+    holdSpeed(speed);
     mManeuver.aborting = true;
     mManeuver.abortReason = reason;
     mManeuver.blockedSince = SimTime::ZERO;
@@ -493,7 +597,8 @@ void BaseMcService::finishManeuver(const char* outcome, const SimTime& now)
             << mManeuver.plan.lat.start << "," << now.dbl() << "," << outcome << ","
             << mManeuver.negotiated << "," << joinIds(mManeuver.acks) << "," << joinIds(mManeuver.nacks) << ","
             << mManeuver.laneChangeDuration << "," << mManeuver.execution.abortAfter << ","
-            << mManeuver.affectedUnknown << "," << joinIds(mManeuver.lastConflicts) << "," << mManeuver.lastUnknown << std::endl;
+            << mManeuver.affectedUnknown << "," << joinIds(mManeuver.lastConflicts) << "," << mManeuver.lastUnknown << ","
+            << mManeuver.targetSpeed - mManeuver.startSpeed << std::endl;
     }
 
     mManeuver = Maneuver();
@@ -612,7 +717,7 @@ bool BaseMcService::findYieldPlan(const Neighbour& n, const SimTime& now, Yield&
             trial.lon.accelDuration = candidate.second != 0.0 ? std::abs(candidate.first - speed) / std::abs(candidate.second) : 0.0;
             trial.lon.maxSpeed = candidate.second > 0.0 ? candidate.first : 1e9;
             trial.type = MC_YIELD;
-            if (!affectedBy(n, trial, now)) {
+            if (!affectedBy(n, trial, now) && (candidate.second <= 0.0 || freeAhead(n, trial, now))) {
                 plan = trial;
                 yield.requester = n.msg->getStationId();
                 yield.requestId = n.msg->getRequestedId();
@@ -626,6 +731,15 @@ bool BaseMcService::findYieldPlan(const Neighbour& n, const SimTime& now, Yield&
         }
     }
     return false;
+}
+
+bool BaseMcService::freeAhead(const Neighbour& requester, const McPlan& trial, const SimTime& now) const
+{
+    // accelerating must not create conflicts with other vehicles, e.g. the own leader
+    bool blockedByUnknown = false;
+    auto conflicts = conflictsOf(trial, keepLanePlan(now), now, now, blockedByUnknown);
+    conflicts.erase(requester.msg->getStationId());
+    return conflicts.empty() && !blockedByUnknown;
 }
 
 void BaseMcService::updateYield(const SimTime& now)
@@ -661,7 +775,7 @@ void BaseMcService::releaseYield(const char* outcome, const SimTime& now)
         log.maneuvers() << stationId() << "," << vehicleId() << "," << mReferenceId << ",yielder,"
             << static_cast<int>(MC_YIELD) << "," << mYield.requester << ","
             << mYield.since.dbl() << "," << mYield.since.dbl() << ",-1," << now.dbl() << "," << outcome << ","
-            << false << ",," << "," << "0,-1,0,,0" << std::endl;
+            << false << ",," << "," << "0,-1,0,,0," << mYield.targetSpeed - mYield.startSpeed << std::endl;
     }
 
     mYield = Yield();
@@ -882,13 +996,18 @@ void BaseMcService::refreshReference(const SimTime& now)
     const double speed = mPlanner->vehicleSpeed();
     switch (mState) {
         case State::Idle:
-        case State::Requesting:
             // lane keeping at the current speed, with the path of the current lane
             mReference = keepLanePlan(now);
+            break;
+        case State::Requesting:
+            // lane keeping, including the speed change of the gap selection
+            mReference = keepLanePlan(now);
+            mReference.lon = maneuverLongitudinal(speed);
             break;
         case State::Committed:
         case State::Executing:
             mPlanner->anchor(mManeuver.plan, now.dbl(), speed);
+            mManeuver.plan.lon = maneuverLongitudinal(speed);
             mReference = mManeuver.plan;
             break;
         case State::Yielding: {
@@ -906,6 +1025,7 @@ void BaseMcService::refreshReference(const SimTime& now)
     }
     if (mState == State::Requesting) {
         mPlanner->anchor(mManeuver.plan, now.dbl(), speed);
+        mManeuver.plan.lon = maneuverLongitudinal(speed);
     }
 }
 
@@ -1058,6 +1178,29 @@ void BaseMcService::controlLateral(const SimTime& now)
     if (std::abs(delta) > 0.005) {
         mVehicleController->getTraCI()->vehicle.changeSublane(vehicleId(), delta);
     }
+}
+
+McLongitudinalProfile BaseMcService::maneuverLongitudinal(double speed) const
+{
+    McLongitudinalProfile lon;
+    lon.v0 = speed;
+    const double dv = mManeuver.targetSpeed - speed;
+    if (mManeuver.speedAccel != 0.0 && dv * mManeuver.speedAccel > 0.0) {
+        lon.accel = mManeuver.speedAccel;
+        lon.accelDuration = dv / mManeuver.speedAccel;
+        lon.maxSpeed = lon.accel > 0.0 ? mManeuver.targetSpeed : 1e9;
+    }
+    return lon;
+}
+
+void BaseMcService::controlLongitudinal(const SimTime&)
+{
+    if (mManeuver.speedAccel == 0.0) {
+        return; // the speed is held since the announcement
+    }
+    // closed loop as for the lateral movement: the speed of the next step, the target speed is held once reached
+    const McLongitudinalProfile lon = maneuverLongitudinal(mPlanner->vehicleSpeed());
+    holdSpeed(lon.accelDuration > 0.0 ? lon.speed(mLateralLookahead) : mManeuver.targetSpeed);
 }
 
 void BaseMcService::holdSpeed(double speed)
